@@ -140,6 +140,10 @@ public class VotInjector {
             return;
         }
         int end = Math.min(offset + chunkSize, js.length());
+        // Avoid splitting surrogate pair
+        if (end < js.length() && end > 0 && Character.isHighSurrogate(js.charAt(end - 1)) && Character.isLowSurrogate(js.charAt(end))) {
+            end += 1;
+        }
         String chunk = js.substring(offset, end);
         // Use quoted storage — safe to split at arbitrary offset, chunk is treated as string literal
         if (offset == 0) {
@@ -154,14 +158,15 @@ public class VotInjector {
             String finalJs = "window.__votChunks.push(" + org.json.JSONObject.quote(chunk) + ");"
                     + "window.__votCombined=window.__votChunks.join('');"
                     + "window.__votChunks=null;"
-                    + "console.log('VOT combined len='+window.__votCombined.length+', head='+window.__votCombined.slice(0,80));"
+                    + "console.log('VOT combined len='+window.__votCombined.length+', head='+window.__votCombined.slice(0,120)+', tail='+window.__votCombined.slice(-400));"
+                    + "console.log('VOT tail2 '+window.__votCombined.slice(-800,-400));"
                     + "try{"
                     + "if(window.trustedTypes&&window.trustedTypes.createPolicy){"
                     + "var p=null;try{p=window.trustedTypes.createPolicy('vot-'+Math.random(),{createScript:function(s){return s;}});}catch(e){console.log('TT vot random failed '+e);}"
                     + "if(!p){try{p=window.trustedTypes.createPolicy('default',{createScript:function(s){return s;}});}catch(e){console.log('TT default failed '+e);}}"
-                    + "if(p){console.log('TT policy ok '+p.name);var s=p.createScript(window.__votCombined);eval(s);}else{console.log('TT no policy, try eval');eval(window.__votCombined);}"
-                    + "}else{eval(window.__votCombined);}"
-                    + "}catch(e){console.error('VOT eval failed',e);try{eval(window.__votCombined);}catch(e2){console.error('VOT eval fallback failed',e2);}}"
+                    + "if(p){console.log('TT policy ok '+p.name);var s=p.createScript(window.__votCombined);eval(s);}else{console.error('TT no policy');}"
+                    + "}else{console.error('TT unsupported');}"
+                    + "}catch(e){console.error('VOT eval failed',e);console.error(e.stack||e);}"
                     + "window.__votCombined=null;window.__votInjecting=false;";
             webView.evaluateJavascript(finalJs, v -> { synchronized (sLock) { sInjecting = false; } });
             Log.d(TAG, "VOT injected chunked final total=" + js.length());
