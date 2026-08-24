@@ -287,10 +287,15 @@ public class BrowserUnit {
 
     public static String redirectURL (WebView ninjaWebView, SharedPreferences sp, String url) {
         try {
+            // Youtube flavor never redirects youtube (hard block even if stale pref exists)
+            try { if (de.baumann.browser.BuildConfig.IS_YOUTUBE && url != null && url.toLowerCase().contains("youtube.com")) return url; } catch (Throwable t) {}
+            try { if (de.baumann.browser.BuildConfig.IS_YOUTUBE && url != null && url.toLowerCase().contains("youtu.be")) return url; } catch (Throwable t) {}
             List<CustomRedirect> redirects = CustomRedirectsHelper.getRedirects(sp);
             for (int i = 0; i < redirects.size(); i++) {
                 CustomRedirect customRedirect = redirects.get(i);
                 if (url.contains(customRedirect.getSource()) && sp.getBoolean(customRedirect.getSource(), true)) {
+                    // extra guard: youtube flavor ignores youtube redirects even if somehow saved
+                    try { if (de.baumann.browser.BuildConfig.IS_YOUTUBE && customRedirect.getSource().contains("youtube.com")) continue; } catch (Throwable t) {}
                     ninjaWebView.stopLoading();
                     url = url.replace(customRedirect.getSource(), customRedirect.getTarget());
                     return url;
