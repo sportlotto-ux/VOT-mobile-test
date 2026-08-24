@@ -80,8 +80,48 @@ public class ExoPlayerController implements Player.EventListener {
     }
 
     public void openSabr(MediaItemFormatInfo formatInfo) {
+        // VOT integration: try to fetch VOT audio and merge
+        Video video = getVideo();
+        String videoId = video != null ? video.videoId : null;
+        if (videoId != null && shouldUseVot()) {
+            // async fetch VOT to not block UI
+            new Thread(() -> {
+                try {
+                    String votUrl = com.liskovsoft.smartyoutubetv2.common.vot.VotClient.INSTANCE.getVotAudioUrlBlocking(videoId, 0, "en", "ru");
+                    if (votUrl != null) {
+                        android.os.Handler main = new android.os.Handler(android.os.Looper.getMainLooper());
+                        main.post(() -> {
+                            try {
+                                MediaSource videoSource = mMediaSourceFactory.fromSabrFormatInfo(formatInfo);
+                                MediaSource votSource = mMediaSourceFactory.fromUrlList(java.util.Collections.singletonList(votUrl));
+                                MediaSource merged = new MergingMediaSource(true, true, videoSource, votSource);
+                                openMediaSource(merged);
+                                Log.d(TAG, "VOT merged: " + votUrl);
+                            } catch (Exception e) {
+                                Log.e(TAG, "VOT merge failed, fallback to video only", e);
+                                MediaSource mediaSource = mMediaSourceFactory.fromSabrFormatInfo(formatInfo);
+                                openMediaSource(mediaSource);
+                            }
+                        });
+                        return;
+                    }
+                } catch (Exception e) {
+                    Log.e(TAG, "VOT fetch failed", e);
+                }
+                // fallback
+                MediaSource mediaSource = mMediaSourceFactory.fromSabrFormatInfo(formatInfo);
+                // need to post to main if we are in background thread
+                new android.os.Handler(android.os.Looper.getMainLooper()).post(() -> openMediaSource(mediaSource));
+            }).start();
+            return;
+        }
         MediaSource mediaSource = mMediaSourceFactory.fromSabrFormatInfo(formatInfo);
         openMediaSource(mediaSource);
+    }
+
+    private boolean shouldUseVot() {
+        // For now always true for youtube videos, could add pref
+        return true;
     }
 
     public void openDash(MediaItemFormatInfo formatInfo) {
