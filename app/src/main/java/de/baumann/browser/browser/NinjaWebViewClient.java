@@ -506,6 +506,13 @@ public class NinjaWebViewClient extends WebViewClient {
 
     @Override
     public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
+        // Phase 2: VOT virtual asset host — must be checked before AdBlock
+        try {
+            WebResourceResponse votResp = de.baumann.browser.vot.VotInjector.interceptAsset(view, request.getUrl().toString());
+            if (votResp != null) return votResp;
+        } catch (Exception e) {
+            android.util.Log.w("VOT", "intercept failed", e);
+        }
         if (ninjaWebView.isAdBlock() && adBlock.isAd(request.getUrl().toString()))
             return new WebResourceResponse(
                     BrowserUnit.MIME_TYPE_TEXT_PLAIN,
