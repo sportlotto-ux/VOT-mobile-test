@@ -1,64 +1,103 @@
-<p align="center">
-<img src="https://codeberg.org/Gaukler_Faun/FOSS_Browser/raw/branch/master/fastlane/metadata/android/en-US/images/featuresGraphic.png" alt="FOSS Browser" width="600"/>
-</p>
+# VOT Browser — YouTube с закадровым переводом Яндекса
 
-<p align="center">
-<a href="https://translate.codeberg.org/engage/foss-browser/">
-<img src="https://translate.codeberg.org/widgets/foss-browser/-/strings/287x66-white.png" alt="Übersetzungsstatus" />
-</a></p>
+> Форк [FOSS Browser](https://codeberg.org/Gaukler_Faun/FOSS_Browser) (AGPL-3.0), заточенный под YouTube. Открываешь видео — смотришь с русской озвучкой VOT, без прероллов, с фоновым воспроизведением.
 
+[![Build](https://github.com/sportlotto-ux/VOT-mobile-test/actions/workflows/build.yml/badge.svg)](https://github.com/sportlotto-ux/VOT-mobile-test/actions)
+License: AGPL-3.0 (форк) + MIT (VOT) — см. [NOTICE.md](NOTICE.md)
 
-__[README](https://codeberg.org/Gaukler_Faun/FOSS_Browser/src/branch/master/README.md)__ | __[WIKI](https://codeberg.org/Gaukler_Faun/FOSS_Browser/wiki)__ | __[FAQs](https://codeberg.org/Gaukler_Faun/FOSS_Browser/src/branch/master/FAQs.md)__ | __[Releases](https://codeberg.org/Gaukler_Faun/FOSS_Browser/releases)__ | __[Changelog](https://codeberg.org/Gaukler_Faun/FOSS_Browser/src/branch/master/CHANGELOG.md)__ | __[ISSUES](https://codeberg.org/Gaukler_Faun/FOSS_Browser/issues)__ | __[Privacy](https://codeberg.org/Gaukler_Faun/FOSS_Browser/src/branch/master/PRIVACY.md)__ | __[License](https://codeberg.org/Gaukler_Faun/FOSS_Browser/src/branch/master/LICENSE.md)__ | __[Code of conduct](https://codeberg.org/Gaukler_Faun/FOSS_Browser/src/branch/master/CODE_OF_CONDUCT.md)__ | __[Help translating](https://translate.codeberg.org/projects/foss-browser/)__
+---
 
-----
+## Что это
 
-FOSS Browser is an Android application to browse through the internet. It uses the Android webview to render websites and has no advanced render engine like  normal  browsers.
+Android WebView-браузер с инжектом юзерскрипта [voice-over-translation](https://github.com/ilyhalight/voice-over-translation) (1.11.8, MIT):
+- кнопка перевода прямо в плеере YouTube
+- дрифт ≤0.15s после перемоток
+- автопропуск прероллов (JS-скиппер) + скрытие баннеров
+- фоновое воспроизведение с MediaSession (управление с нотификации/гарнитуры)
+- вход в аккаунт сохранён (подписки, 18+), cookies не режутся
 
-----
+Распространение: **GitHub Releases** (APK `app-youtube-debug` / `release`). F-Droid-ветка планируется с `SCRIPT_AUTOUPDATE=false`.
 
-### Privacy
+---
 
-FOSS Browser can save settings fot each domain to protect your privacy. For each domain you can enable or disable: AdBlock, JavaScript, cookies, fingerprint protection and much more. For non saved domains you can edit a standard profile to your needs.
+## Отличия от апстрима
 
-_More privacy features:_
+| Область | FOSS Browser | VOT Browser (`youtube` flavor) |
+|---|---|---|
+| Домашняя | `codeberg.org/.../wiki` | `https://www.youtube.com` |
+| UA для youtube.com | как у профиля | форсирован десктоп Chrome 126 (`NinjaWebView.isYouTubeHost`) |
+| AdBlock | StevenBlack 93k (ежедневное обновление) | узкий трекинг-лист `hosts_youtube.txt` (аналитика, без рекламных — прероллы закрывает скиппер) |
+| Флейворы | один APK | `full` (как был) / `youtube` (`.vot`, `IS_YOUTUBE=true`) |
+| Инжект | нет | `NinjaWebViewClient.onPageStarted` → `GmShim` + `NativeHttpBridge` (вайтлист, `GM_*` полифилы) |
+| Скиппер | нет | `skipping-rules.js` (селекторы `.ytp-ad-*`) — обновляется через манифест |
 
-- Built-in AdBlock, which updates automatically. You can decide which content to block. AdBlock hosts are taken from [Steven Black - AdBlock hosts](https://github.com/StevenBlack/hosts).
-- Third-party cookies can be disabled.
-- block cookie banners
-- Enable or disable Android-autofill.
-- Delete browser data (on app exit).
-- Choose between different search engines (or set a custom one).
-- FOSS Browser itself doesn't collect any data: [Privacy policy](https://codeberg.org/Gaukler_Faun/FOSS_Browser/src/branch/master/PRIVACY.md)
+`full` флейвор остаётся 1-в-1 как апстрим (полный hosts, без VOT).
 
+---
 
-----
-### UI/Handling
+## Установка
 
-FOSS Browser uses the latest Material You design libraries. Following system day/night mode and a wallpaper based theme are just two features of this new library. The UI is optimized for one-hand-use. All UI-elements are at the bottom of the screen.
+1. Скачай APK из Releases (`app-youtube-debug.apk` или `release`).
+2. Разреши установку из неизвестных источников.
+3. Открой `youtube.com` — проверь что перевод появляется.
 
+Сборка из исходников:
 
-_More features:_
+```bash
+./gradlew assembleYoutubeDebug   # VOT
+./gradlew assembleFullDebug      # оригинал
+# или :app:assembleYoutubeRelease
+```
 
-- Keep screen on.
-- Open links in background.
-- Restore tabs on restart.
+Требует JDK 17, Android SDK `platforms;android-35` + `build-tools;35.0.0`, Gradle 8.11.1.
 
-----
-### Bookmarks filter
+---
 
-Organize your bookmarks with filters. You can set custom names for each filter. Long press the bookmark icon in the toolbar to get fast access to your favorite bookmarks.
+## Обновление VOT-скрипта
 
-----
-### Gestures
+- **GitHub Releases канал (по умолчанию):** скрипты `vot.user.js` + `skipping-rules.js` обновляются без пересборки APK через подписанный манифест (ed25519, `version` монотонный, downgrade-защита). Источник — `raw.githubusercontent.com/ilyhalight/.../dist/vot.user.js` (проверяется `sha256` + подпись). F-Droid-ветка — статичные `assets/vot/*`.
+- Текущий бандл: `app/src/main/assets/vot/vot.user.js` v1.11.8.
+- Селекторы скиппера вынесены в `skipping-rules.js` и тоже обновляются через манифест.
 
-You can assign nearly twenty different gestures to the toolbar and the toolbar buttons. Each in four directions. You can also trigger events by long pressing the toolbar buttons. So you have up to ten different gestures to control FOSS Browser. Supported is for example: load last website, switch tab, reload, open bookmarks, ... and many more.
+---
 
-----
-### Backups
+## ⚠️ Риск бана аккаунта
 
-Backup all your important data and settings (bookmarks, history, websites-settings and so on) on your SD-card. You can also back up FOSS Browser settings. Backups can even be restored on a fresh install or another device (if you copy the backup files to the new device).
+Скиппер делает активный автоклик/промотку (`video.playbackRate=10`) под залогиненным Google-аккаунтом — поведенчески отличимо от пассивной блокировки. YouTube может связать паттерн с аккаунтом.
 
-----
+> **Вход в аккаунт при включённом скиппере — на свой риск.** Для параноидального режима используй без логина. Подробности — ТЗ Фаза 2.4.
 
-[<img src="https://f-droid.org/badge/get-it-on.png" alt="Get it on F-Droid" height="50"/>](https://f-droid.org/packages/de.baumann.browser/)
-[<img src="https://www.paypalobjects.com/de_DE/DE/i/btn/btn_donateCC_LG.gif" alt="Donate" height="50"/>](https://www.paypal.com/cgi-bin/webscr?cmd=_s-xclick&hosted_button_id=NP6TGYDYP9SHY)
+---
+
+## Приватность
+
+- `hosts_youtube.txt` — только аналитика/телеметрия, не рекламные домены. Часть телеметрии YouTube всё равно уходит (осознанный компромисс MVP).
+- `DNT:1`, `Sec-GPC:1`, `X-Requested-With` — как в апстриме.
+- FOSS Browser сам данные не собирает. См. [PRIVACY.md](PRIVACY.md).
+
+---
+
+## Разработка
+
+- Фаза 0: клон, инвентаризация `GM_*` — см. [docs/phase0-notes.md](docs/phase0-notes.md)
+- Фаза 1: YouTube-профиль — см. [docs/build-notes.md](docs/build-notes.md)
+- Фаза 2: инжектор + `GmShim` + `NativeHttpBridge` + скиппер
+- Фаза 3: FGS `mediaPlayback` + единый нативный тик
+
+Исходники новых модулей (план): `app/src/main/java/de/baumann/browser/vot/` и `app/src/main/assets/vot/`.
+
+---
+
+## Лицензии
+
+- Код браузера — **AGPL-3.0** (как апстрим). См. [LICENSE.md](LICENSE.md).
+- VOT юзерскрипт, полифилы — **MIT** (ilyhalight).
+- Модификации форка распространяются под AGPL-3.0. См. [NOTICE.md](NOTICE.md).
+- Иконка/графика — из апстрима + Material.
+
+---
+
+## Апстрим
+
+- Codeberg: https://codeberg.org/Gaukler_Faun/FOSS_Browser
+- Issues апстрима — отдельно, баги форка — в Issues этого репо.
