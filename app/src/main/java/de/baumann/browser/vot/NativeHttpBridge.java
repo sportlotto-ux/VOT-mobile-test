@@ -133,11 +133,33 @@ public class NativeHttpBridge {
             }
         }
 
+        // Detect Content-Type from headersJson, default to json if body looks like json
+        String contentType = null;
+        if (headersJson != null && !headersJson.isEmpty() && !headersJson.equals("null")) {
+            try {
+                JSONObject joTmp = new JSONObject(headersJson);
+                Iterator<String> itTmp = joTmp.keys();
+                while (itTmp.hasNext()) {
+                    String kTmp = itTmp.next();
+                    if (kTmp.equalsIgnoreCase("Content-Type") || kTmp.equalsIgnoreCase("content-type")) {
+                        contentType = joTmp.optString(kTmp, null);
+                        break;
+                    }
+                }
+            } catch (Exception ignored) {}
+        }
+        if (contentType == null) {
+            String trimmed = body != null ? body.trim() : "";
+            if (trimmed.startsWith("{") || trimmed.startsWith("[")) contentType = "application/json; charset=utf-8";
+            else contentType = "application/x-www-form-urlencoded";
+        }
+        Log.d(TAG, "nativeFetch id=" + id + " " + m + " " + url + " ct=" + contentType + " bodyLen=" + (body != null ? body.length() : 0));
+
         if (m.equals("GET")) {
             rb.get();
         } else {
-            MediaType mt = MediaType.parse("application/x-www-form-urlencoded");
-            // try to detect json body?
+            MediaType mt = MediaType.parse(contentType);
+            if (mt == null) mt = MediaType.parse("application/octet-stream");
             RequestBody rbBody = body == null ? RequestBody.create(new byte[0]) : RequestBody.create(body, mt);
             rb.post(rbBody);
         }
@@ -156,6 +178,7 @@ public class NativeHttpBridge {
             @Override public void onResponse(Call call, Response response) throws IOException {
                 try (ResponseBody rb = response.body()) {
                     String respText = rb != null ? rb.string() : "";
+                    Log.d(TAG, "nativeFetch resp id=" + id + " code=" + response.code() + " url=" + url + " bodyHead=" + (respText.length() > 500 ? respText.substring(0, 500) : respText));
                     // Build headers string like Tampermonkey: "key: value\r\n"
                     StringBuilder headersSb = new StringBuilder();
                     for (String name : response.headers().names()) {
