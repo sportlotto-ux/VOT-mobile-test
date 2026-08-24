@@ -81,7 +81,7 @@ public class VotInjector {
                 + "if(window.__votInjected||window.__votInjecting)return;"
                 + "window.__votInjecting=true;"
                 // SmartTube-like: block AV1 to force vp9/h264 on weak TV box
-                + "try{var oMT=HTMLMediaElement.prototype.canPlayType;HTMLMediaElement.prototype.canPlayType=function(t){if(t&&t.indexOf('av01')>-1)return'';return oMT.apply(this,arguments);};if(window.MediaSource&&MediaSource.isTypeSupported){var oIs=MediaSource.isTypeSupported;MediaSource.isTypeSupported=function(t){if(t&&t.indexOf('av01')>-1)return false;return oIs.apply(this,arguments);};}}catch(e){}"
+                + "try{var oMT=HTMLMediaElement.prototype.canPlayType;HTMLMediaElement.prototype.canPlayType=function(t){if(t&&t.indexOf('av01')>-1)return '';return oMT.apply(this,arguments);};if(window.MediaSource&&MediaSource.isTypeSupported){var oIs=MediaSource.isTypeSupported;MediaSource.isTypeSupported=function(t){if(t&&t.indexOf('av01')>-1)return false;return oIs.apply(this,arguments);};}}catch(e){};"
                 + GmShim.getShimJs()
                 + skipperJs()
                 + tvAutoFullscreenJs()
