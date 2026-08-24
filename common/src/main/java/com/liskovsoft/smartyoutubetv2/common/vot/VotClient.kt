@@ -9,10 +9,13 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
+<<<<<<< HEAD
 /**
  * Minimal VOT client - Yandex voice-over-translation via vot-worker JSON wrapper.
  * Uses OkHttp 3.x API (same as upstream Utils.java) for clean upstream merges.
  */
+=======
+>>>>>>> 135552f (feat(vot): integrate VOT into ExoPlayerController via MergingMediaSource)
 object VotClient {
     private const val TAG = "VOT"
     private const val WORKER_HOST = "vot-worker.vtrans.eu.cc"
@@ -23,6 +26,7 @@ object VotClient {
         .writeTimeout(15, TimeUnit.SECONDS)
         .build()
 
+<<<<<<< HEAD
     @JvmStatic
     @JvmOverloads
     fun getVotAudioUrlBlocking(videoId: String, duration: Int = 0, langFrom: String = "en", langTo: String = "ru"): String? {
@@ -32,6 +36,15 @@ object VotClient {
             extractUrl(resp)
         } catch (e: Exception) {
             Log.w(TAG, "getVotAudioUrlBlocking error", e)
+=======
+    fun getVotAudioUrlBlocking(videoId: String, duration: Int = 0, langFrom: String = "en", langTo: String = "ru"): String? {
+        return try {
+            val body = createTranslateBody("https://youtu.be/$videoId", duration, langFrom, langTo)
+            val resp = postProtobuf("/video-translation/translate", body, emptyMap()) ?: return null
+            extractUrl(resp)
+        } catch (e: Exception) {
+            Log.w(TAG, "blocking error", e)
+>>>>>>> 135552f (feat(vot): integrate VOT into ExoPlayerController via MergingMediaSource)
             null
         }
     }
@@ -42,6 +55,7 @@ object VotClient {
         return regex.find(text)?.value?.trim()?.takeIf { it.contains(".mp3") || it.contains(".m4a") }
     }
 
+<<<<<<< HEAD
     private fun encodeTranslationRequest(url: String, duration: Int, langFrom: String, langTo: String): ByteArray {
         return buildProtobuf {
             writeString(1, url.toByteArray())   // url
@@ -56,6 +70,33 @@ object VotClient {
             writeBool(12, true)                 // unknown2
             writeInt32(13, 2)                   // unknown3
             writeBool(14, false)                // bypassCache
+=======
+    suspend fun getVotAudioUrl(videoId: String, videoUrl: String = "https://youtu.be/$videoId", duration: Int = 0, langFrom: String = "en", langTo: String = "ru"): String? = withContext(Dispatchers.IO) {
+        getVotAudioUrlBlocking(videoId, duration, langFrom, langTo)
+    }
+
+    private fun createTranslateBody(videoUrl: String, duration: Int, langFrom: String, langTo: String): ByteArray {
+        return encodeTranslationRequest(videoUrl, duration, langFrom, langTo)
+    }
+
+    private fun encodeTranslationRequest(url: String, duration: Int, langFrom: String, langTo: String): ByteArray {
+        val urlBytes = url.toByteArray()
+        val langBytes = langFrom.toByteArray()
+        val respLangBytes = langTo.toByteArray()
+        return buildProtobuf {
+            writeString(1, urlBytes)
+            writeBool(2, true)
+            writeInt32(3, duration)
+            writeBool(4, true)
+            writeString(5, langBytes)
+            writeBool(6, false)
+            writeBool(7, false)
+            writeString(10, respLangBytes)
+            writeBool(11, false)
+            writeBool(12, true)
+            writeInt32(13, 2)
+            writeBool(14, false)
+>>>>>>> 135552f (feat(vot): integrate VOT into ExoPlayerController via MergingMediaSource)
         }
     }
 
