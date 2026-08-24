@@ -68,6 +68,18 @@ public class NinjaWebViewClient extends WebViewClient {
     public void onPageFinished(WebView view, String url) {
         super.onPageFinished(view, url);
 
+        // Phase 2: VOT injection (youtube hosts, JS enabled)
+        try {
+            if (de.baumann.browser.vot.VotInjector.shouldInject(url)) {
+                String profile = NinjaWebView.getProfile();
+                if (sp.getBoolean(profile + "_javascript", true)) {
+                    de.baumann.browser.vot.VotInjector.inject(view);
+                }
+            }
+        } catch (Exception e) {
+            android.util.Log.w("VOT", "inject onPageFinished failed", e);
+        }
+
         if (ninjaWebView.isForeground()) ninjaWebView.invalidate();
         else ninjaWebView.postInvalidate();
         CookieManager.getInstance().flush();
@@ -100,6 +112,18 @@ public class NinjaWebViewClient extends WebViewClient {
         ninjaWebView.resetFavicon();
 
         super.onPageStarted(view, url, favicon);
+
+        // Phase 2: early VOT injection (also in onPageFinished as fallback)
+        try {
+            if (de.baumann.browser.vot.VotInjector.shouldInject(url)) {
+                String profile = NinjaWebView.getProfile();
+                if (sp.getBoolean(profile + "_javascript", true)) {
+                    de.baumann.browser.vot.VotInjector.inject(view);
+                }
+            }
+        } catch (Exception e) {
+            android.util.Log.w("VOT", "early inject failed", e);
+        }
 
         String profile = NinjaWebView.getProfile();
         if (sp.getBoolean(profile + "_deny_cookie_banners",false)){

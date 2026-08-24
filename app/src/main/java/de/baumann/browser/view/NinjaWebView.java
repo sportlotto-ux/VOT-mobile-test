@@ -219,6 +219,13 @@ public class NinjaWebView extends WebView implements AlbumController {
             Log.i(TAG, "Error loading cookies:" + e);
         }
         this.addJavascriptInterface(new WebAppInterface(context), "AndroidInterface");
+        // Phase 2: VOT bridge (GM_* + nativeFetch) — exposed as VotBridge for shim
+        try {
+            // Avoid duplicate add: remove existing if any (no API to remove, so just add — last wins)
+            this.addJavascriptInterface(new de.baumann.browser.vot.NativeHttpBridge(context, this), "VotBridge");
+        } catch (Exception e) {
+            Log.w(TAG, "VotBridge add failed", e);
+        }
 
         profile = profileOriginal;
     }
