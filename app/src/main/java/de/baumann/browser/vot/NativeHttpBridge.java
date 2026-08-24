@@ -13,6 +13,7 @@ import androidx.preference.PreferenceManager;
 import org.json.JSONObject;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.Iterator;
 import java.util.concurrent.TimeUnit;
 
@@ -177,8 +178,12 @@ public class NativeHttpBridge {
             }
             @Override public void onResponse(Call call, Response response) throws IOException {
                 try (ResponseBody rb = response.body()) {
-                    String respText = rb != null ? rb.string() : "";
-                    Log.d(TAG, "nativeFetch resp id=" + id + " code=" + response.code() + " url=" + url + " bodyHead=" + (respText.length() > 500 ? respText.substring(0, 500) : respText));
+                    byte[] raw = rb != null ? rb.bytes() : new byte[0];
+                    // keep utf8 string for text responses, and base64 for binary (protobuf)
+                    String respText = new String(raw, StandardCharsets.UTF_8);
+                    String b64 = android.util.Base64.encodeToString(raw, android.util.Base64.NO_WRAP);
+                    String headLog = raw.length > 500 ? b64.substring(0, 500) + "...b64 len=" + b64.length() : (respText.length() > 500 ? respText.substring(0, 500) : respText);
+                    Log.d(TAG, "nativeFetch resp id=" + id + " code=" + response.code() + " url=" + url + " bytes=" + raw.length + " bodyHead=" + headLog);
                     // Build headers string like Tampermonkey: "key: value\r\n"
                     StringBuilder headersSb = new StringBuilder();
                     for (String name : response.headers().names()) {
@@ -191,6 +196,7 @@ public class NativeHttpBridge {
                         json.put("statusText", response.message() != null ? response.message() : "");
                         json.put("responseText", respText);
                         json.put("response", respText);
+                        json.put("responseBase64", b64);
                         json.put("responseHeaders", headersSb.toString());
                         json.put("finalUrl", finalUrl);
                         json.put("readyState", 4);
