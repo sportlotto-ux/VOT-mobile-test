@@ -87,22 +87,41 @@ public class VotInjector {
 
     public static void inject(WebView webView) {
         try {
-            Context ctx = webView.getContext();
-            String js = buildInjectionJs(ctx);
-            if (js.isEmpty()) {
-                Log.w(TAG, "injection js empty");
-                return;
-            }
-            // Binder limit ~1MB, vot is 1.1M — chunk to avoid TransactionTooLargeException
-            // Split into 400k chunks and chain evaluateJavascript
-            int chunkSize = 400 * 1024;
-            if (js.length() <= chunkSize) {
-                webView.evaluateJavascript(js, null);
-                Log.d(TAG, "VOT injected single chunk size=" + js.length());
-                return;
-            }
-            // chunked injection: wrap each chunk in eval, sequence via callbacks
-            injectChunked(webView, js, 0, chunkSize);
+            // Dedup check before heavy asset load
+            webView.evaluateJavascript("(window.__votInjected||window.__votInjecting) ? 'true' : 'false'", val -> {
+                if (val != null && val.contains("true")) {
+                    Log.d(TAG, "VOT already injected/in progress, skip");
+                    return;
+                }
+                // Lock to prevent concurrent injections (YouTube SPA fires onPageStarted+onPageFinished rapidly)
+                webView.evaluateJavascript("window.__votInjecting=true;", null);
+                try {
+                    Context ctx = webView.getContext();
+                    String js = buildInjectionJs(ctx);
+                    if (js.isEmpty()) {
+                        Log.w(TAG, "injection js empty");
+                        return;
+                    }
+                    int chunkSize = 400 * 1024;
+                    if (js.length() <= chunkSize) {
+                        String q = org.json.JSONObject.quote(js);
+                        String wrapped = "try{"
+                                + "if(window.trustedTypes&&window.trustedTypes.createPolicy){"
+                                + "var p=null;try{p=window.trustedTypes.createPolicy('vot-'+Math.random(),{createScript:function(s){return s;}});}catch(e){}"
+                                + "if(!p){try{p=window.trustedTypes.createPolicy('default',{createScript:function(s){return s;}});}catch(e){}}"
+                                + "if(p){eval(p.createScript(" + q + "));}else{eval(" + q + ");}"
+                                + "}else{eval(" + q + ");}"
+                                + "}catch(e){console.error('VOT single eval failed',e);try{eval(" + q + ");}catch(e2){}}"
+                                + "window.__votInjecting=false;";
+                        webView.evaluateJavascript(wrapped, null);
+                        Log.d(TAG, "VOT injected single chunk size=" + js.length());
+                        return;
+                    }
+                    injectChunked(webView, js, 0, chunkSize);
+                } catch (Exception e) {
+                    Log.w(TAG, "inject inner failed", e);
+                }
+            });
         } catch (Exception e) {
             Log.w(TAG, "inject failed", e);
         }
@@ -129,8 +148,20 @@ public class VotInjector {
         } else if (end < js.length()) {
             webView.evaluateJavascript("window.__votChunks.push(" + org.json.JSONObject.quote(chunk) + ");", v -> injectChunked(webView, js, end, chunkSize));
         } else {
-            // last chunk
-            webView.evaluateJavascript("window.__votChunks.push(" + org.json.JSONObject.quote(chunk) + "); window.__votCombined=window.__votChunks.join(''); window.__votChunks=null; try{ eval(window.__votCombined); }catch(e){ console.error('VOT eval failed', e); } window.__votCombined=null;", null);
+            // last chunk — use Trusted Types bypass for YouTube CSP
+            String finalJs = "window.__votChunks.push(" + org.json.JSONObject.quote(chunk) + ");"
+                    + "window.__votCombined=window.__votChunks.join('');"
+                    + "window.__votChunks=null;"
+                    + "try{"
+                    + "if(window.trustedTypes&&window.trustedTypes.createPolicy){"
+                    + "var p=null;"
+                    + "try{p=window.trustedTypes.createPolicy('vot-'+Math.random(),{createScript:function(s){return s;},createHTML:function(s){return s;}});}catch(e){}"
+                    + "if(!p){try{p=window.trustedTypes.createPolicy('default',{createScript:function(s){return s;}});}catch(e){}}"
+                    + "if(p){var s=p.createScript(window.__votCombined);eval(s);}else{eval(window.__votCombined);}"
+                    + "}else{eval(window.__votCombined);}"
+                    + "}catch(e){console.error('VOT eval failed',e);try{eval(window.__votCombined);}catch(e2){}}"
+                    + "window.__votCombined=null;window.__votInjecting=false;";
+            webView.evaluateJavascript(finalJs, null);
             Log.d(TAG, "VOT injected chunked total size=" + js.length());
         }
     }
