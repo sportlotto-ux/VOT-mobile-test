@@ -139,12 +139,13 @@ public class VotInjector {
             Log.d(TAG, "VOT chunked injection complete");
             return;
         }
-        int end = Math.min(offset + chunkSize, js.length());
+        int tmpEnd = Math.min(offset + chunkSize, js.length());
         // Avoid splitting surrogate pair
-        if (end < js.length() && end > 0 && Character.isHighSurrogate(js.charAt(end - 1)) && Character.isLowSurrogate(js.charAt(end))) {
-            end += 1;
+        if (tmpEnd < js.length() && tmpEnd > 0 && Character.isHighSurrogate(js.charAt(tmpEnd - 1)) && Character.isLowSurrogate(js.charAt(tmpEnd))) {
+            tmpEnd += 1;
         }
-        String chunk = js.substring(offset, end);
+        final int end = tmpEnd;
+        final String chunk = js.substring(offset, end);
         // Use quoted storage — safe to split at arbitrary offset, chunk is treated as string literal
         if (offset == 0) {
             webView.evaluateJavascript("window.__votChunks=[];", v -> {
