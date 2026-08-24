@@ -1,32 +1,37 @@
 package com.liskovsoft.smartyoutubetv2.common.vot
 
 import android.util.Log
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
-import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.MediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.RequestBody
+import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
+/**
+ * Minimal VOT client - Yandex voice-over-translation via vot-worker JSON wrapper.
+ * Uses OkHttp 3.x API (same as upstream Utils.java) for clean upstream merges.
+ */
 object VotClient {
     private const val TAG = "VOT"
     private const val WORKER_HOST = "vot-worker.vtrans.eu.cc"
-    private const val WORKER_SCHEME = "https"
+    private val JSON = MediaType.parse("application/json; charset=utf-8")
     private val client = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(15, TimeUnit.SECONDS)
         .writeTimeout(15, TimeUnit.SECONDS)
         .build()
 
+    @JvmStatic
+    @JvmOverloads
     fun getVotAudioUrlBlocking(videoId: String, duration: Int = 0, langFrom: String = "en", langTo: String = "ru"): String? {
         return try {
-            val body = createTranslateBody("https://youtu.be/$videoId", duration, langFrom, langTo)
-            val resp = postProtobuf("/video-translation/translate", body, emptyMap()) ?: return null
+            val body = encodeTranslationRequest("https://youtu.be/$videoId", duration, langFrom, langTo)
+            val resp = postProtobuf("/video-translation/translate", body) ?: return null
             extractUrl(resp)
         } catch (e: Exception) {
-            Log.w(TAG, "blocking error", e)
+            Log.w(TAG, "getVotAudioUrlBlocking error", e)
             null
         }
     }
@@ -37,54 +42,42 @@ object VotClient {
         return regex.find(text)?.value?.trim()?.takeIf { it.contains(".mp3") || it.contains(".m4a") }
     }
 
-    suspend fun getVotAudioUrl(videoId: String, videoUrl: String = "https://youtu.be/$videoId", duration: Int = 0, langFrom: String = "en", langTo: String = "ru"): String? = withContext(Dispatchers.IO) {
-        getVotAudioUrlBlocking(videoId, duration, langFrom, langTo)
-    }
-
-    private fun createTranslateBody(videoUrl: String, duration: Int, langFrom: String, langTo: String): ByteArray {
-        return encodeTranslationRequest(videoUrl, duration, langFrom, langTo)
-    }
-
     private fun encodeTranslationRequest(url: String, duration: Int, langFrom: String, langTo: String): ByteArray {
-        val urlBytes = url.toByteArray()
-        val langBytes = langFrom.toByteArray()
-        val respLangBytes = langTo.toByteArray()
         return buildProtobuf {
-            writeString(1, urlBytes)
-            writeBool(2, true)
-            writeInt32(3, duration)
-            writeBool(4, true)
-            writeString(5, langBytes)
-            writeBool(6, false)
-            writeBool(7, false)
-            writeString(10, respLangBytes)
-            writeBool(11, false)
-            writeBool(12, true)
-            writeInt32(13, 2)
-            writeBool(14, false)
+            writeString(1, url.toByteArray())   // url
+            writeBool(2, true)                  // firstRequest
+            writeInt32(3, duration)             // duration
+            writeBool(4, true)                  // unknown0
+            writeString(5, langFrom.toByteArray()) // language
+            writeBool(6, false)                 // forceSourceLang
+            writeBool(7, false)                 // unknown1
+            writeString(10, langTo.toByteArray())  // responseLanguage
+            writeBool(11, false)                // wasStream
+            writeBool(12, true)                 // unknown2
+            writeInt32(13, 2)                   // unknown3
+            writeBool(14, false)                // bypassCache
         }
     }
 
-    private fun postProtobuf(path: String, body: ByteArray, extraHeaders: Map<String, String>): ByteArray? {
+    private fun postProtobuf(path: String, body: ByteArray): ByteArray? {
         val json = JSONObject().apply {
             put("headers", JSONObject().apply {
                 put("User-Agent", "Mozilla/5.0")
                 put("Accept", "application/x-protobuf")
                 put("Content-Type", "application/x-protobuf")
-                for ((k, v) in extraHeaders) put(k, v)
             })
-            put("body", org.json.JSONArray(body.map { it.toInt() and 0xFF }))
+            put("body", JSONArray(body.map { it.toInt() and 0xFF }))
         }.toString()
         val req = Request.Builder()
-            .url("$WORKER_SCHEME://$WORKER_HOST$path")
-            .post(json.toRequestBody("application/json".toMediaType()))
+            .url("https://$WORKER_HOST$path")
+            .post(RequestBody.create(JSON, json))
             .build()
         client.newCall(req).execute().use { resp ->
             if (!resp.isSuccessful) {
-                Log.w(TAG, "worker $path failed ${resp.code} ${resp.message}")
+                Log.w(TAG, "worker $path failed ${resp.code()}")
                 return null
             }
-            return resp.body?.bytes()
+            return resp.body()?.bytes()
         }
     }
 
@@ -93,6 +86,7 @@ object VotClient {
         w.block()
         return w.toByteArray()
     }
+
     private class ProtobufWriter {
         private val out = java.io.ByteArrayOutputStream()
         fun writeString(field: Int, bytes: ByteArray) {
