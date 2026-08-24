@@ -21,7 +21,9 @@ import java.io.InputStream;
  */
 public class VotInjector {
     private static final String TAG = "VotInjector";
-    public static final String ASSET_HOST = "vot.assets.local";
+    // Use www.youtube.com/__vot/* so CSP script-src https://*.youtube.com allows it; intercepted via shouldInterceptRequest
+    public static final String ASSET_HOST = "www.youtube.com";
+    public static final String ASSET_PREFIX = "/__vot__/"; 
     private static final String VOT_ASSET = "vot/vot.user.js";
     private static final String SKIPPER_ASSET = "vot/skipping-rules.js";
 
@@ -31,14 +33,15 @@ public class VotInjector {
         return lower.contains("youtube.com") || lower.contains("youtu.be") || lower.contains("youtube-nocookie.com");
     }
 
-    /** Serves vot assets for the virtual host; null when the url is not ours. */
+    /** Serves vot assets for www.youtube.com/__vot/*; null when not ours. */
     public static WebResourceResponse interceptAsset(WebView view, String url) {
         if (url == null || view == null) return null;
         Uri uri = Uri.parse(url);
         if (!ASSET_HOST.equals(uri.getHost())) return null;
         String path = uri.getPath();
-        if (path == null) return null;
-        String asset = "vot" + path;
+        if (path == null || !path.startsWith(ASSET_PREFIX)) return null;
+        String asset = "vot" + path.substring(ASSET_PREFIX.length() - 1); // "/__vot/vot.user.js" -> "/vot.user.js"
+        if (asset.startsWith("/")) asset = asset.substring(1);
         try {
             AssetManager am = view.getContext().getAssets();
             InputStream is = am.open(asset);
@@ -69,8 +72,8 @@ public class VotInjector {
 
     /** Tiny bootstrap: shim + ad skipper inline, VOT + skipping-rules as <script src>. */
     public static String buildBootstrapJs(Context ctx) {
-        String votUrl = "https://" + ASSET_HOST + "/vot.user.js";
-        String rulesUrl = "https://" + ASSET_HOST + "/skipping-rules.js";
+        String votUrl = "https://" + ASSET_HOST + ASSET_PREFIX + "vot.user.js";
+        String rulesUrl = "https://" + ASSET_HOST + ASSET_PREFIX + "skipping-rules.js";
         // Atomic dedup: check+set in one synchronous evaluate, no cross-call race
         // YouTube enforces require-trusted-types-for 'script' -> s.src needs TrustedScriptURL
         // DOM may be null at onPageStarted -> poll for head/documentElement
