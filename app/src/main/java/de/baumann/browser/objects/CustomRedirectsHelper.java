@@ -22,12 +22,41 @@ public class CustomRedirectsHelper {
         ArrayList<CustomRedirect> redirects = new ArrayList<>();
         String redirectsPref = preferences.getString(CUSTOM_REDIRECTS_KEY, "[]");
 
+        boolean isYoutube = false;
+        try { isYoutube = de.baumann.browser.BuildConfig.IS_YOUTUBE; } catch (Throwable t) { isYoutube = false; }
+
         if (Objects.requireNonNull(preferences.getString("saved_redirect_ok", "no")).equals("no")) {
-            redirects.add(new CustomRedirect("m.youtube.com", preferences.getString("sp_youTube_string_domain", "invidious.nerdvpn.de")));
-            redirects.add(new CustomRedirect("youtube.com", preferences.getString("sp_youTube_string_domain", "invidious.nerdvpn.de")));
+            if (!isYoutube) {
+                redirects.add(new CustomRedirect("m.youtube.com", preferences.getString("sp_youTube_string_domain", "invidious.nerdvpn.de")));
+                redirects.add(new CustomRedirect("youtube.com", preferences.getString("sp_youTube_string_domain", "invidious.nerdvpn.de")));
+            }
             redirects.add(new CustomRedirect("twitter.com", preferences.getString("sp_twitter_string_domain", "nitter.net")));
             saveRedirects(redirects);
             preferences.edit().putString("saved_redirect_ok", "yes").apply();
+        }
+
+        // Youtube flavor: clean stale youtube->invidious redirects from previous installs
+        if (isYoutube && redirectsPref.contains("youtube.com")) {
+            try {
+                JSONArray arr = new JSONArray(redirectsPref);
+                JSONArray filtered = new JSONArray();
+                boolean changed = false;
+                for (int i = 0; i < arr.length(); i++) {
+                    JSONObject o = arr.getJSONObject(i);
+                    String src = o.optString("source", "");
+                    if (src.contains("youtube.com")) {
+                        changed = true;
+                        continue;
+                    }
+                    filtered.put(o);
+                }
+                if (changed) {
+                    preferences.edit().putString(CUSTOM_REDIRECTS_KEY, filtered.toString()).apply();
+                    redirectsPref = filtered.toString();
+                }
+            } catch (Exception e) {
+                // ignore
+            }
         }
 
         JSONArray array = new JSONArray(redirectsPref);

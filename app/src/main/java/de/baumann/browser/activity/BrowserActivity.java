@@ -233,6 +233,15 @@ public class BrowserActivity extends AppCompatActivity implements BrowserControl
         activity = BrowserActivity.this;
         context = BrowserActivity.this;
         sp = PreferenceManager.getDefaultSharedPreferences(context);
+        // Phase 1/2: youtube flavor — migrate favoriteURL from codeberg/invidious to youtube on first youtube run
+        try {
+            if (de.baumann.browser.BuildConfig.IS_YOUTUBE) {
+                String fav = sp.getString("favoriteURL", "");
+                if (fav.contains("codeberg.org") || fav.contains("invidious.") || fav.isEmpty()) {
+                    sp.edit().putString("favoriteURL", YOUTUBE_HOME).apply();
+                }
+            }
+        } catch (Throwable t) { /* ignore if BuildConfig not available */ }
         //noinspection InstantiationOfUtilityClass
         new BannerBlock(context);
         HelperUnit.initTheme(activity);
