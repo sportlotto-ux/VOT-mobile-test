@@ -80,10 +80,9 @@ public class VotInjector {
                 + "})();";
 
         // Order: shim -> skipping-rules -> skipper logic -> vot.user.js
-        // skippingRules defines window.__votSkippingRules
         String inner = shim + "\n" + skippingRules + "\n" + skipperJs + "\n" + vot;
-        // Dedup guard — prevents double injection on onPageStarted+onPageFinished
-        return "if(window.__votInjected){console.log('VOT already injected');}else{window.__votInjected=true;" + inner + "\n}";
+        // Dedup is handled outside via window.__votInjected/__votInjecting check; just mark injected
+        return "window.__votInjected=true;\n" + inner;
         // Note: vot.user.js is wrapped, but its top-level return/break still works because it's not in function scope originally
     }
 
@@ -117,20 +116,15 @@ public class VotInjector {
                     }
                     int chunkSize = 400 * 1024;
                     if (js.length() <= chunkSize) {
-                        String q = org.json.JSONObject.quote(js);
-                        String policyTry = "var p=null;var names=['youtube','yt','default','vot'];for(var i=0;i<names.length;i++){try{p=window.trustedTypes.createPolicy(names[i],{createScript:function(s){return s;}});if(p)break;}catch(e){}}if(!p){try{p=window.trustedTypes.createPolicy('vot-'+Math.random(),{createScript:function(s){return s;}});}catch(e){}}";
-                        String wrapped = "try{"
-                                + "if(window.trustedTypes&&window.trustedTypes.createPolicy){"
-                                + policyTry
-                                + "if(p){eval(p.createScript(" + q + "));}else{eval(" + q + ");}"
-                                + "}else{eval(" + q + ");}"
-                                + "}catch(e){console.error('VOT single eval failed',e);try{eval(" + q + ");}catch(e2){}}"
-                                + "window.__votInjecting=false;";
-                        webView.evaluateJavascript(wrapped, v -> { synchronized (sLock) { sInjecting = false; } });
+                        // Direct evaluate without eval — bypasses Trusted Types entirely
+                        webView.evaluateJavascript(js, v -> {
+                            synchronized (sLock) { sInjecting = false; }
+                            webView.evaluateJavascript("window.__votInjecting=false;", null);
+                        });
                         Log.d(TAG, "VOT injected single chunk size=" + js.length());
                         return;
                     }
-                    injectChunked(webView, js, 0, chunkSize);
+                    injectChunkedDirect(webView, js, 0, chunkSize);
                 } catch (Exception e) {
                     Log.w(TAG, "inject inner failed", e);
                 }
@@ -140,40 +134,37 @@ public class VotInjector {
         }
     }
 
-    private static void injectChunked(WebView webView, String js, int offset, int chunkSize) {
+    private static void injectChunkedDirect(WebView webView, String js, int offset, int chunkSize) {
         if (offset >= js.length()) {
-            Log.d(TAG, "VOT chunked injection complete");
+            webView.evaluateJavascript("window.__votInjecting=false;", v -> { synchronized (sLock) { sInjecting = false; } });
+            Log.d(TAG, "VOT chunked injection complete total=" + js.length());
             return;
         }
         int end = Math.min(offset + chunkSize, js.length());
+        // Find safe split point near end (search backwards for ; or } or newline) to avoid breaking inside string literal / expression
+        if (end < js.length()) {
+            int safe = -1;
+            // search last 4k for a safe boundary
+            int searchStart = Math.max(offset, end - 4096);
+            for (int i = end - 1; i >= searchStart; i--) {
+                char c = js.charAt(i);
+                if (c == ';' || c == '\n') { safe = i + 1; break; }
+            }
+            if (safe > offset && safe < end) {
+                end = safe;
+            }
+        }
         String chunk = js.substring(offset, end);
-        // Escape chunk for JS string? We send raw JS, but need to ensure chunk boundaries don't split surrogate pairs — substring handles, but JS eval of partial code may be syntactically invalid if split inside string literal.
-        // To avoid syntax errors, we split at line boundaries where possible.
-        // Find last newline before end to avoid splitting inside vot's minified line (which has no newlines) — for minified, chunk will split arbitrarily but still may break string literals.
-        // For MVP we split raw; vot.user.js is mostly one line with no unescaped newlines, but splitting inside a string literal could break.
-        // Better: encode chunk as base64 and eval via atob? Simpler: just send chunk as is and rely on JS engine to handle concatenated evals? That won't work because partial JS is not valid.
-        // So we use a different strategy: store chunks in an array and eval combined.
-        // Approach: first chunk creates window.__votChunks = [], then push, final chunk joins and evals.
+        final int nextOffset = end;
+        webView.evaluateJavascript(chunk, v -> {
+            // Continue with next chunk; log errors if any (v contains result or error? WebView returns JSON)
+            if (v != null && v.contains("Exception")) {
+                Log.w(TAG, "chunk eval returned exception at offset " + offset + ": " + v);
+            }
+            injectChunkedDirect(webView, js, nextOffset, chunkSize);
+        });
         if (offset == 0) {
-            webView.evaluateJavascript("window.__votChunks=[];", v -> {
-                webView.evaluateJavascript("window.__votChunks.push(" + org.json.JSONObject.quote(chunk) + ");", v2 -> injectChunked(webView, js, end, chunkSize));
-            });
-        } else if (end < js.length()) {
-            webView.evaluateJavascript("window.__votChunks.push(" + org.json.JSONObject.quote(chunk) + ");", v -> injectChunked(webView, js, end, chunkSize));
-        } else {
-            // last chunk — use Trusted Types bypass for YouTube CSP
-            String finalJs = "window.__votChunks.push(" + org.json.JSONObject.quote(chunk) + ");"
-                    + "window.__votCombined=window.__votChunks.join('');"
-                    + "window.__votChunks=null;"
-                    + "try{"
-                    + "if(window.trustedTypes&&window.trustedTypes.createPolicy){"
-                    + "var p=null;var names=['youtube','yt','default','vot'];for(var i=0;i<names.length;i++){try{p=window.trustedTypes.createPolicy(names[i],{createScript:function(s){return s;}});if(p)break;}catch(e){}}if(!p){try{p=window.trustedTypes.createPolicy('vot-'+Math.random(),{createScript:function(s){return s;}});}catch(e){}}"
-                    + "if(p){var s=p.createScript(window.__votCombined);eval(s);}else{eval(window.__votCombined);}"
-                    + "}else{eval(window.__votCombined);}"
-                    + "}catch(e){console.error('VOT eval failed',e);try{eval(window.__votCombined);}catch(e2){}}"
-                    + "window.__votCombined=null;window.__votInjecting=false;";
-            webView.evaluateJavascript(finalJs, v -> { synchronized (sLock) { sInjecting = false; } });
-            Log.d(TAG, "VOT injected chunked total size=" + js.length());
+            Log.d(TAG, "VOT chunked direct start total=" + js.length() + " chunkSize=" + chunkSize);
         }
     }
 }
