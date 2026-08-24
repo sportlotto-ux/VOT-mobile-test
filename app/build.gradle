@@ -1,0 +1,62 @@
+apply plugin: 'com.android.application'
+
+android {
+
+    compileSdk 35
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+
+    defaultConfig {
+        applicationId "de.baumann.browser"
+        minSdkVersion 26
+        targetSdkVersion 36
+        versionCode 158
+        versionName "23"
+        multiDexEnabled true
+        vectorDrawables.useSupportLibrary = true
+    }
+
+    flavorDimensions "mode"
+    productFlavors {
+        full {
+            dimension "mode"
+            buildConfigField "boolean", "IS_YOUTUBE", "false"
+            // full browser — как был, hosts-блоклист целиком из StevenBlack
+        }
+        youtube {
+            dimension "mode"
+            buildConfigField "boolean", "IS_YOUTUBE", "true"
+            // VOT Browser — упор на youtube.com, урезанный трекинг-лист, UA-override
+            applicationIdSuffix ".vot"
+            versionNameSuffix "-vot"
+        }
+    }
+    // Phase 4: исключение Activity/Fragment через sourceSets будет добавлено здесь
+    // youtube { java { exclude ... } }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.txt'
+        }
+    }
+    buildFeatures {
+        buildConfig true
+    }
+    lint {
+        checkReleaseBuilds false
+        disable 'MissingTranslation'
+    }
+    namespace 'de.baumann.browser'
+
+    return void
+}
+
+dependencies {
+    implementation 'com.google.android.material:material:1.14.0'
+    implementation 'androidx.preference:preference:1.2.1'
+    implementation 'androidx.webkit:webkit:1.16.0'
+    implementation 'com.google.code.gson:gson:2.11.0'
+}

@@ -1,0 +1,4 @@
+# StevenBlack hosts placeholder — will be updated from https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts
+# Date: 2026-08-23 placeholder
+# This file is copied to internal storage on first run and then refreshed every 24h
+0.0.0.0 placeholder.example.com

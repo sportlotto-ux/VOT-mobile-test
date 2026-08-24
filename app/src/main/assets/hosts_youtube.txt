@@ -1,0 +1,33 @@
+# VOT Browser youtube flavor — narrow tracking hosts (Phase 1)
+# Based on StevenBlack but only analytics/telemetry, NOT ad domains
+# Prerolls are handled by JS skipper, so ad hosts not needed
+# Date: 2026-08-23
+# Purpose: reduce telemetry while allowing youtube ad domains to pass through
+# These domains are loaded independently from video ads on youtube.com
+
+google-analytics.com
+ssl.google-analytics.com
+www.google-analytics.com
+region1.google-analytics.com
+www.googletagmanager.com
+googletagmanager.com
+googletagservices.com
+www.googletagservices.com
+hotjar.com
+hotjar.io
+adm.hotjar.com
+insights.hotjar.io
+stats.g.doubleclick.net
+www.google-analytics.com
+googleadservices.com
+googlesyndication.com
+# yandex metrica (if youtube embeds yandex)
+mc.yandex.ru
+mc.yandex.com
+watch.yandex.net
+# generic analytics
+analytics.google.com
+analytics.youtube.com
+youtube-analytics.com
+yt-analytics.com
+# keep minimal — full list would be StevenBlack 93k
