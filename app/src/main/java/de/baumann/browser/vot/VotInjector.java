@@ -116,7 +116,7 @@ public class VotInjector {
                     }
                     int chunkSize = 400 * 1024;
                     if (js.length() <= chunkSize) {
-                        // Direct evaluate without eval — bypasses Trusted Types entirely
+                        // Direct evaluate without eval — bypasses Trusted Types entirely (single chunk, no split issues)
                         webView.evaluateJavascript(js, v -> {
                             synchronized (sLock) { sInjecting = false; }
                             webView.evaluateJavascript("window.__votInjecting=false;", null);
@@ -124,7 +124,7 @@ public class VotInjector {
                         Log.d(TAG, "VOT injected single chunk size=" + js.length());
                         return;
                     }
-                    injectChunkedDirect(webView, js, 0, chunkSize);
+                    injectChunked(webView, js, 0, chunkSize);
                 } catch (Exception e) {
                     Log.w(TAG, "inject inner failed", e);
                 }
@@ -134,37 +134,37 @@ public class VotInjector {
         }
     }
 
-    private static void injectChunkedDirect(WebView webView, String js, int offset, int chunkSize) {
+    private static void injectChunked(WebView webView, String js, int offset, int chunkSize) {
         if (offset >= js.length()) {
-            webView.evaluateJavascript("window.__votInjecting=false;", v -> { synchronized (sLock) { sInjecting = false; } });
-            Log.d(TAG, "VOT chunked injection complete total=" + js.length());
+            Log.d(TAG, "VOT chunked injection complete");
             return;
         }
         int end = Math.min(offset + chunkSize, js.length());
-        // Find safe split point near end (search backwards for ; or } or newline) to avoid breaking inside string literal / expression
-        if (end < js.length()) {
-            int safe = -1;
-            // search last 4k for a safe boundary
-            int searchStart = Math.max(offset, end - 4096);
-            for (int i = end - 1; i >= searchStart; i--) {
-                char c = js.charAt(i);
-                if (c == ';' || c == '\n') { safe = i + 1; break; }
-            }
-            if (safe > offset && safe < end) {
-                end = safe;
-            }
-        }
         String chunk = js.substring(offset, end);
-        final int nextOffset = end;
-        webView.evaluateJavascript(chunk, v -> {
-            // Continue with next chunk; log errors if any (v contains result or error? WebView returns JSON)
-            if (v != null && v.contains("Exception")) {
-                Log.w(TAG, "chunk eval returned exception at offset " + offset + ": " + v);
-            }
-            injectChunkedDirect(webView, js, nextOffset, chunkSize);
-        });
+        // Use quoted storage — safe to split at arbitrary offset, chunk is treated as string literal
         if (offset == 0) {
-            Log.d(TAG, "VOT chunked direct start total=" + js.length() + " chunkSize=" + chunkSize);
+            webView.evaluateJavascript("window.__votChunks=[];", v -> {
+                webView.evaluateJavascript("window.__votChunks.push(" + org.json.JSONObject.quote(chunk) + ");", v2 -> injectChunked(webView, js, end, chunkSize));
+            });
+            Log.d(TAG, "VOT chunked start total=" + js.length() + " chunkSize=" + chunkSize);
+        } else if (end < js.length()) {
+            webView.evaluateJavascript("window.__votChunks.push(" + org.json.JSONObject.quote(chunk) + ");", v -> injectChunked(webView, js, end, chunkSize));
+        } else {
+            // last chunk — join and eval with Trusted Types support (YouTube requires TrustedScript)
+            String finalJs = "window.__votChunks.push(" + org.json.JSONObject.quote(chunk) + ");"
+                    + "window.__votCombined=window.__votChunks.join('');"
+                    + "window.__votChunks=null;"
+                    + "console.log('VOT combined len='+window.__votCombined.length+', head='+window.__votCombined.slice(0,80));"
+                    + "try{"
+                    + "if(window.trustedTypes&&window.trustedTypes.createPolicy){"
+                    + "var p=null;try{p=window.trustedTypes.createPolicy('vot-'+Math.random(),{createScript:function(s){return s;}});}catch(e){console.log('TT vot random failed '+e);}"
+                    + "if(!p){try{p=window.trustedTypes.createPolicy('default',{createScript:function(s){return s;}});}catch(e){console.log('TT default failed '+e);}}"
+                    + "if(p){console.log('TT policy ok '+p.name);var s=p.createScript(window.__votCombined);eval(s);}else{console.log('TT no policy, try eval');eval(window.__votCombined);}"
+                    + "}else{eval(window.__votCombined);}"
+                    + "}catch(e){console.error('VOT eval failed',e);try{eval(window.__votCombined);}catch(e2){console.error('VOT eval fallback failed',e2);}}"
+                    + "window.__votCombined=null;window.__votInjecting=false;";
+            webView.evaluateJavascript(finalJs, v -> { synchronized (sLock) { sInjecting = false; } });
+            Log.d(TAG, "VOT injected chunked final total=" + js.length());
         }
     }
 }
