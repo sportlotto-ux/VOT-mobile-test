@@ -73,6 +73,7 @@ public class VotInjector {
         String rulesUrl = "https://" + ASSET_HOST + "/skipping-rules.js";
         // Atomic dedup: check+set in one synchronous evaluate, no cross-call race
         // YouTube enforces require-trusted-types-for 'script' -> s.src needs TrustedScriptURL
+        // DOM may be null at onPageStarted -> poll for head/documentElement
         return "(function(){"
                 + "if(window.__votInjected||window.__votInjecting)return;"
                 + "window.__votInjecting=true;"
@@ -85,10 +86,19 @@ public class VotInjector {
                 + "    try{var p=window.trustedTypes.createPolicy('vot-'+Math.random(),{createScriptURL:function(s){return s;}});return p.createScriptURL(url);}catch(e){}"
                 + "  }return url;"
                 + "};"
-                + "var load=function(src){var s=document.createElement('script');try{s.src=getTrustedUrl(src);}catch(e){try{s.src=src;}catch(e2){}} s.async=false;(document.head||document.documentElement).appendChild(s);};"
+                + "var load=function(src){"
+                + "  var s=document.createElement('script');"
+                + "  try{s.src=getTrustedUrl(src);}catch(e){try{s.src=src;}catch(e2){}}"
+                + "  s.async=false;"
+                + "  var doAppend=function(){var p=document.head||document.documentElement;if(p){try{p.appendChild(s);return true;}catch(e){console.error('VOT append failed',e);return false;}}return false;};"
+                + "  if(!doAppend()){"
+                + "    var iv=setInterval(function(){if(doAppend())clearInterval(iv);},20);"
+                + "    document.addEventListener('DOMContentLoaded',function(){if(doAppend())clearInterval(iv);},{once:true});"
+                + "    setTimeout(function(){clearInterval(iv);},5000);"
+                + "  }"
+                + "};"
                 + "try{load('" + rulesUrl + "');load('" + votUrl + "');}catch(e){console.error('VOT bootstrap script tag failed',e);}"
-                + "window.__votInjected=true;"
-                + "window.__votInjecting=false;"
+                + "setTimeout(function(){window.__votInjected=true;window.__votInjecting=false;},100);"
                 + "})();";
     }
 
