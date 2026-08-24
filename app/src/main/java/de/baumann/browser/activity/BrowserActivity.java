@@ -591,7 +591,9 @@ public class BrowserActivity extends AppCompatActivity implements BrowserControl
                 try {
                     RecordAction action = new RecordAction(context);
                     action.open(true);
-                    if (action.checkUrl(ninjaWebView.getUrl(), RecordUnit.TABLE_BOOKMARK)) {
+                    String curUrl = null;
+                    try { if (ninjaWebView != null) curUrl = ninjaWebView.getUrl(); } catch (Throwable ignored) {}
+                    if (curUrl != null && action.checkUrl(curUrl, RecordUnit.TABLE_BOOKMARK)) {
                         fab_overview.setImageResource(R.drawable.icon_bookmark_added);
                     } else {
                         fab_overview.setImageResource(R.drawable.icon_bookmark);
@@ -2518,7 +2520,7 @@ public class BrowserActivity extends AppCompatActivity implements BrowserControl
                     animation.setDuration(250);
                     animation.start();
                 }
-                Log.d("Handler", "Running Handler");
+                if (de.baumann.browser.BuildConfig.DEBUG) Log.d("Handler", "Running Handler");
             }, 50);
         });
 

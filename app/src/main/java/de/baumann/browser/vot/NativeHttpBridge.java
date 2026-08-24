@@ -33,7 +33,7 @@ import okhttp3.ResponseBody;
  */
 public class NativeHttpBridge {
     private static final String TAG = "VOTBridge";
-    private static final long TIMEOUT_SEC = 10;
+    private static final long TIMEOUT_SEC = 20;
 
     // Whitelist per TZ 2.3 + phase0 @connect
     private static final String[] ALLOWED_HOSTS = new String[]{
@@ -154,7 +154,7 @@ public class NativeHttpBridge {
             if (trimmed.startsWith("{") || trimmed.startsWith("[")) contentType = "application/json; charset=utf-8";
             else contentType = "application/x-www-form-urlencoded";
         }
-        Log.d(TAG, "nativeFetch id=" + id + " " + m + " " + url + " ct=" + contentType + " bodyLen=" + (body != null ? body.length() : 0));
+        if (de.baumann.browser.BuildConfig.DEBUG) Log.d(TAG, "nativeFetch id=" + id + " " + m + " " + url + " ct=" + contentType + " bodyLen=" + (body != null ? body.length() : 0));
 
         if (m.equals("GET")) {
             rb.get();
@@ -183,7 +183,7 @@ public class NativeHttpBridge {
                     String respText = new String(raw, StandardCharsets.UTF_8);
                     String b64 = android.util.Base64.encodeToString(raw, android.util.Base64.NO_WRAP);
                     String headLog = raw.length > 500 ? b64.substring(0, 500) + "...b64 len=" + b64.length() : (respText.length() > 500 ? respText.substring(0, 500) : respText);
-                    Log.d(TAG, "nativeFetch resp id=" + id + " code=" + response.code() + " url=" + url + " bytes=" + raw.length + " bodyHead=" + headLog);
+                    if (de.baumann.browser.BuildConfig.DEBUG) Log.d(TAG, "nativeFetch resp id=" + id + " code=" + response.code() + " url=" + url + " bytes=" + raw.length + " bodyHead=" + headLog);
                     // Build headers string like Tampermonkey: "key: value\r\n"
                     StringBuilder headersSb = new StringBuilder();
                     for (String name : response.headers().names()) {

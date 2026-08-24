@@ -129,7 +129,7 @@ public class VotInjector {
             Context ctx = webView.getContext();
             String js = buildBootstrapJs(ctx);
             webView.evaluateJavascript(js, null);
-            Log.d(TAG, "VOT bootstrap injected, size=" + js.length());
+            if (de.baumann.browser.BuildConfig.DEBUG) Log.d(TAG, "VOT bootstrap injected, size=" + js.length());
         } catch (Exception e) {
             Log.w(TAG, "inject failed", e);
         }
