@@ -80,8 +80,11 @@ public class VotInjector {
         return "(function(){"
                 + "if(window.__votInjected||window.__votInjecting)return;"
                 + "window.__votInjecting=true;"
+                // SmartTube-like: block AV1 to force vp9/h264 on weak TV box
+                + "try{var oMT=HTMLMediaElement.prototype.canPlayType;HTMLMediaElement.prototype.canPlayType=function(t){if(t&&t.indexOf('av01')>-1)return'';return oMT.apply(this,arguments);};if(window.MediaSource&&MediaSource.isTypeSupported){var oIs=MediaSource.isTypeSupported;MediaSource.isTypeSupported=function(t){if(t&&t.indexOf('av01')>-1)return false;return oIs.apply(this,arguments);};}}catch(e){}"
                 + GmShim.getShimJs()
                 + skipperJs()
+                + tvAutoFullscreenJs()
                 + "var getTrustedUrl=function(url){"
                 + "  if(window.trustedTypes&&window.trustedTypes.createPolicy){"
                 + "    var names=['youtube','yt','default','vot','tt','google'];"
@@ -122,6 +125,11 @@ public class VotInjector {
                 + "  if(video && video.playbackRate!==10) video.playbackRate=10;"
                 + " } catch(e){}"
                 + "},500);";
+    }
+
+    private static String tvAutoFullscreenJs() {
+        return "document.addEventListener('click',function(e){try{var v=e.target&&e.target.closest?e.target.closest('video'):null;if(!v)v=document.querySelector('video');if(v&&!document.fullscreenElement&&window.innerWidth>=960){try{v.requestFullscreen? v.requestFullscreen(): (v.webkitRequestFullscreen&&v.webkitRequestFullscreen());}catch(_){}}}catch(_){}},true);"
+                + "document.addEventListener('play',function(e){try{var v=e.target;if(v&&v.tagName==='VIDEO'&&!document.fullscreenElement&&window.innerWidth>=960){setTimeout(function(){try{v.requestFullscreen? v.requestFullscreen(): (v.webkitRequestFullscreen&&v.webkitRequestFullscreen());}catch(_){}},300);}}catch(_){}},true);";
     }
 
     public static void inject(WebView webView) {

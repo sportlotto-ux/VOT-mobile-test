@@ -286,6 +286,8 @@ public class BrowserActivity extends AppCompatActivity implements BrowserControl
         dialogOverview = builderOverview.create();
         bottom_navigation = dialogViewOverview.findViewById(R.id.bottom_navigation);
         tab_container = dialogViewOverview.findViewById(R.id.listTabs);
+        // SmartTube-like lite UI for TV box: hide tabs bar to save CPU/RAM
+        try { if (de.baumann.browser.BuildConfig.IS_YOUTUBE && isTvDevice()) { bottom_navigation.setVisibility(View.GONE); tab_container.setVisibility(View.GONE); } } catch (Exception ignored) {}
         HelperUnit.setupDialog(context, dialogOverview);
         dialogOverview.show();
 
@@ -973,6 +975,16 @@ public class BrowserActivity extends AppCompatActivity implements BrowserControl
         if (overViewTab.equals(getString(R.string.album_title_tab))) bottom_navigation.setSelectedItemId(R.id.page_0);
         else if (overViewTab.equals(getString(R.string.album_title_bookmarks))) bottom_navigation.setSelectedItemId(R.id.page_2);
         else if (overViewTab.equals(getString(R.string.album_title_history))) bottom_navigation.setSelectedItemId(R.id.page_3);
+    }
+
+    private boolean isTvDevice() {
+        try {
+            android.app.UiModeManager um = (android.app.UiModeManager) getSystemService(UI_MODE_SERVICE);
+            if (um != null && um.getCurrentModeType() == Configuration.UI_MODE_TYPE_TELEVISION) return true;
+            if (getPackageManager().hasSystemFeature(PackageManager.FEATURE_LEANBACK)) return true;
+            if (getPackageManager().hasSystemFeature("android.software.leanback_only")) return true;
+        } catch (Exception ignored) {}
+        return false;
     }
 
     public void hideOverflow () {
