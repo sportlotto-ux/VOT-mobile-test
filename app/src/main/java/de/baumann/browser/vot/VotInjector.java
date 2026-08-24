@@ -72,12 +72,20 @@ public class VotInjector {
         String votUrl = "https://" + ASSET_HOST + "/vot.user.js";
         String rulesUrl = "https://" + ASSET_HOST + "/skipping-rules.js";
         // Atomic dedup: check+set in one synchronous evaluate, no cross-call race
+        // YouTube enforces require-trusted-types-for 'script' -> s.src needs TrustedScriptURL
         return "(function(){"
                 + "if(window.__votInjected||window.__votInjecting)return;"
                 + "window.__votInjecting=true;"
                 + GmShim.getShimJs()
                 + skipperJs()
-                + "var load=function(src){var s=document.createElement('script');s.src=src;s.async=false;(document.head||document.documentElement).appendChild(s);};"
+                + "var getTrustedUrl=function(url){"
+                + "  if(window.trustedTypes&&window.trustedTypes.createPolicy){"
+                + "    var names=['youtube','yt','default','vot','tt','google'];"
+                + "    for(var i=0;i<names.length;i++){try{var p=window.trustedTypes.createPolicy(names[i],{createScriptURL:function(s){return s;}});return p.createScriptURL(url);}catch(e){}}"
+                + "    try{var p=window.trustedTypes.createPolicy('vot-'+Math.random(),{createScriptURL:function(s){return s;}});return p.createScriptURL(url);}catch(e){}"
+                + "  }return url;"
+                + "};"
+                + "var load=function(src){var s=document.createElement('script');try{s.src=getTrustedUrl(src);}catch(e){try{s.src=src;}catch(e2){}} s.async=false;(document.head||document.documentElement).appendChild(s);};"
                 + "try{load('" + rulesUrl + "');load('" + votUrl + "');}catch(e){console.error('VOT bootstrap script tag failed',e);}"
                 + "window.__votInjected=true;"
                 + "window.__votInjecting=false;"
