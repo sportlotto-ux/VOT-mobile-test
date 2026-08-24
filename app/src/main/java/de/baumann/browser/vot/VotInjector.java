@@ -2,6 +2,7 @@ package de.baumann.browser.vot;
 
 import android.content.Context;
 import android.content.res.AssetManager;
+import android.util.Base64;
 import android.util.Log;
 import android.webkit.WebView;
 
@@ -146,17 +147,19 @@ public class VotInjector {
         }
         final int end = tmpEnd;
         final String chunk = js.substring(offset, end);
-        // Use quoted storage — safe to split at arbitrary offset, chunk is treated as string literal
+        // Base64 ensures no quoting/escaping issues (newline, quotes, backslashes, unicode)
+        final String b64 = Base64.encodeToString(chunk.getBytes(StandardCharsets.UTF_8), Base64.NO_WRAP);
+        // Use atob on JS side to decode — safe to split at arbitrary offset
         if (offset == 0) {
             webView.evaluateJavascript("window.__votChunks=[];", v -> {
-                webView.evaluateJavascript("window.__votChunks.push(" + org.json.JSONObject.quote(chunk) + ");", v2 -> injectChunked(webView, js, end, chunkSize));
+                webView.evaluateJavascript("window.__votChunks.push(atob('" + b64 + "'));", v2 -> injectChunked(webView, js, end, chunkSize));
             });
             Log.d(TAG, "VOT chunked start total=" + js.length() + " chunkSize=" + chunkSize);
         } else if (end < js.length()) {
-            webView.evaluateJavascript("window.__votChunks.push(" + org.json.JSONObject.quote(chunk) + ");", v -> injectChunked(webView, js, end, chunkSize));
+            webView.evaluateJavascript("window.__votChunks.push(atob('" + b64 + "'));", v -> injectChunked(webView, js, end, chunkSize));
         } else {
             // last chunk — join and eval with Trusted Types support (YouTube requires TrustedScript)
-            String finalJs = "window.__votChunks.push(" + org.json.JSONObject.quote(chunk) + ");"
+            String finalJs = "window.__votChunks.push(atob('" + b64 + "'));"
                     + "window.__votCombined=window.__votChunks.join('');"
                     + "window.__votChunks=null;"
                     + "console.log('VOT combined len='+window.__votCombined.length+', head='+window.__votCombined.slice(0,120)+', tail='+window.__votCombined.slice(-400));"
