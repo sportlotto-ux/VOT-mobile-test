@@ -50,10 +50,6 @@ android {
     compileSdkVersion project.properties.compileSdkVersion
     buildToolsVersion project.properties.buildToolsVersion
     testOptions.unitTests.includeAndroidResources = true
-    // Non-Robolectric JVM unit tests (e.g. the stmobile update/* suite) call android.util.Log,
-    // whose android.jar stub otherwise throws "Method d/e not mocked". Return defaults so plain
-    // logic tests run; Robolectric tests are unaffected (they shadow android with real impls).
-    testOptions.unitTests.returnDefaultValues = true
     ndkVersion "21.0.6113669" // reduce size of the *.so files (stripping debug symbols)
     
     defaultConfig {
@@ -61,8 +57,8 @@ android {
         applicationId "app.smarttube"
         minSdkVersion project.properties.minSdkVersion
         targetSdkVersion project.properties.targetSdkVersion
-        versionCode 2413
-        versionName "32.23"
+        versionCode 2415
+        versionName "32.25"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField "long", "TIMESTAMP", System.currentTimeMillis() + "L"
 
@@ -103,6 +99,12 @@ android {
         }
     }
     
+    // CI debug builds: skip androidTest (espresso manifest exported error)
+    if (System.getenv("CI")) {
+        android.sourceSets.androidTest.java.srcDirs = []
+        tasks.matching { it.name.contains('AndroidTest') || it.name.contains('androidTest') }.all { it.enabled = false }
+    }
+
     buildTypes {
         release {
             // Enable minification
@@ -134,18 +136,7 @@ android {
             def arch = output.getFilter(com.android.build.OutputFile.ABI)
             arch = arch != null ? arch : "universal"
 
-            def newApkName
-            if (flavor == "mobile") {
-                // SmarterTube asset naming (docs/VERSIONING.md, docs/UPDATER_COMPATIBILITY.md):
-                //   SmarterTube-v0.4.2-beta.1-st31.94-<arch>.apk
-                // The updater's ApkAssetSelector matches the <arch> token; '+' is not filename-safe
-                // so the "+st" metadata separator becomes "-st".
-                def assetVersion = version.replace("+", "-")
-                newApkName = sprintf("SmarterTube-%s-%s.apk", [assetVersion, arch])
-            } else {
-                // Upstream TV flavors keep their existing naming.
-                newApkName = sprintf("%s_%s_%s_%s.apk", [project, flavor, version, arch])
-            }
+            def newApkName = sprintf("%s_%s_%s_%s.apk", [project, flavor, version, arch])
 
             // gradle 4.6 migration
             output.outputFileName = new File(newApkName)
@@ -186,64 +177,6 @@ android {
             applicationId "app.smarttube.fdroid"
             minSdkVersion 21
             targetSdkVersion project.properties.compileSdkVersion
-        }
-        stmobile {
-            // Phone/portrait build. Co-installable alongside the TV build.
-            // This is the shipped product; the TV flavors are upstream-sync only.
-            isDefault true
-            // Explicit applicationId (NOT a suffix on upstream's app.smarttube) so the
-            // package identity is SmarterTube's own: it neither implies association with
-            // upstream SmartTube nor an "official" mobile release, and carries no platform
-            // qualifier (an Android package is implicitly the app; tablets included).
-            // Renamed from the legacy app.smarttube.mobile in the 2026-06 beta — a one-time
-            // clean break (the old id does NOT upgrade in place; see docs/upstream-merge.md).
-            applicationId "com.codesculptor.smartertube"
-            // Fall back to ststable for dependency modules that don't
-            // declare an stmobile flavor.
-            matchingFallbacks = ['ststable']
-            // constants.gradle pins targetSdk to 27 for old Android TV boxes.
-            // 33 stops modern phones showing the "built for an older version
-            // of Android" warning.
-            targetSdkVersion 33
-            // Phone-port versioning. Lives in the flavor (not defaultConfig) so
-            // upstream merges don't conflict on versionCode/versionName lines.
-            //
-            // versionName follows the SmarterTube beta-reset scheme (docs/VERSIONING.md):
-            //   v<app-semver>[-<channel>.<n>]+st<upstream-base>
-            // e.g. v0.4.0-beta.1+st31.93 — the SmarterTube product version is tracked
-            // separately from the upstream SmartTube base (+st31.93). The previous
-            // "<upstream>-mobile-<x.y>" names (e.g. 31.93-mobile-1.4) are LEGACY; the
-            // updater recognises and supersedes them (see SmarterTubeVersion).
-            //
-            // versionCode is INDEPENDENT of upstream's code and MUST increase by 1 past
-            // the last shipped fork release (Android rejects a lower code for in-place
-            // upgrade); this is what makes a beta-reset build supersede the legacy ones.
-            // History: alpha1-4 = 23701-23704, beta1 = 23705, 1.0 = 23706, 1.1 = 23707,
-            // 1.2 = 23708, 1.3 = 23709, 1.4 (31.93-mobile-1.4) = 23710.
-            // 23711 = v0.4.0-beta.1+st31.93 (Gate A beta reset). Gate B Shorts = 23712.
-            // 23713 = v0.4.2-beta.1+st31.94 (Gate C: upstream 31.94 sync + Shorts loop fix).
-            // 23714 = v0.4.2-beta.2+st31.94 (lockscreen + background audio default).
-            // 23715 = v0.4.2-beta.3+st31.94 (subscribe/unsubscribe + notification bell on channel page).
-            // 23716 = v0.4.2-beta.4+st31.94 (portrait channel tap + like/dislike buttons).
-            // 23717 = v0.4.2-beta.5+st31.94 (nav bar + back button on all portrait/landscape player pages).
-            // 23718 = v0.4.2-beta.6+st31.94 (channel avatar + subscriber header on channel page;
-            //         portrait player channel avatar + restyled native like/dislike + larger meta text;
-            //         Shorts channel button shows avatar; fix stale player controls returning from channel page).
-            // 23719 = v0.4.2-beta.7+st31.94 (native channel content tabs Videos/Shorts/Live/Playlists;
-            //         Back in the phone player stops the video and leaves (#23);
-            //         keep channel list after returning from a channel page (#22)).
-            // 23720 = v0.4.2-beta.8+st31.94 (Shorts seek bar visible + auto-hide (#28);
-            //         settings dialog presents as a bottom-sheet card over the player;
-            //         Back on player no longer re-opens a just-closed settings dialog).
-            // 23721 = v0.5.0-beta.1+st31.94 (first release under package com.codesculptor.smartertube;
-            //         pop-up (PIP) shows the video + channel back-stack fix (#33, #24)).
-            // 23722 = v0.5.0-beta.2+st32.05 (upstream SmartTube 32.05 sync;
-            //         video duration badge on browse/up-next thumbnails).
-            // 23723 = v0.5.0-beta.3+st32.10 (upstream SmartTube 32.10 sync;
-            //         stop audio when the pop-up (PIP) window is closed (#35)).
-            // 23724 = v0.5.0-beta.4+st32.23 (upstream SmartTube 32.23 sync).
-            versionCode 23724
-            versionName "v0.5.0-beta.4+st32.23"
         }
     }
 }
@@ -286,9 +219,6 @@ dependencies {
 
     testImplementation 'junit:junit:' + junitVersion
     testImplementation 'org.robolectric:robolectric:' + robolectricVersion
-    // Real org.json for JVM unit tests: android.jar's org.json is a stub (returns defaults under
-    // returnDefaultValues), so the stmobile update/* parser tests need a working implementation.
-    testImplementation 'org.json:json:20231013'
     androidTestImplementation 'androidx.test.ext:junit:' + testXSupportVersion
     androidTestImplementation 'androidx.test.ext:truth:' + testXSupportVersion
     androidTestImplementation 'androidx.test:runner:' + testXSupportVersion
@@ -323,34 +253,4 @@ dependencies {
 
     // ByeByeDPI fix
     implementation 'org.conscrypt:conscrypt-android:' + conscryptVersion
-
-    // Phone flavor (stmobile) native touch UI. AppCompat brings DrawerLayout + a non-Leanback theme.
-    stmobileImplementation 'androidx.appcompat:appcompat:' + appCompatXVersion
-    // Chrome Custom Tabs for the in-app sign-in browser.
-    stmobileImplementation 'androidx.browser:browser:' + browserXVersion
-    // Pull-to-refresh on the phone screens. Literal version (not a constants.gradle
-    // constant) because constants.gradle lives in the SharedModules submodule, which
-    // the fork must not edit. 1.1.0 is the stable release, compatible with appcompat 1.2.0.
-    stmobileImplementation 'androidx.swiperefreshlayout:swiperefreshlayout:1.1.0'
-    // Native channel tabs: Material TabLayout for the tab strip + ViewPager2 for swipeable
-    // pages. materialVersion (1.5.0) and viewpagerXVersion (1.0.0) already live in
-    // SharedModules/constants.gradle (referenced like appCompatXVersion above), so this only
-    // adds the artifacts to the stmobile flavor classpath — no submodule edit, no version drift.
-    stmobileImplementation 'com.google.android.material:material:' + materialVersion
-    stmobileImplementation 'androidx.viewpager2:viewpager2:' + viewpagerXVersion
-    // okhttp on the compile classpath so the phone About screen's update check can reuse
-    // the app's shared OkHttpManager client (its doGetRequest returns okhttp3.Response).
-    // Same version sharedutils already pulls in at runtime (root build.gradle force-resolves
-    // okhttp to okhttpVersion), so this only exposes the type for compilation — no new
-    // artifact or version drift.
-    stmobileImplementation 'com.squareup.okhttp3:okhttp:' + okhttpVersion
-    // WorkManager for the phone upload-notifications background poll. `workVersion` is already
-    // defined in SharedModules/constants.gradle (common pulls the same artifact), so this only
-    // adds it to the stmobile flavor's classpath - smarttubetv depends on :common via a
-    // non-transitive `implementation`, so it isn't visible here otherwise. No version drift.
-    stmobileImplementation 'androidx.work:work-runtime:' + workVersion
-    // Guava provides com.google.common.util.concurrent.ListenableFuture, exposed in
-    // ListenableWorker's API - required on the compile classpath to subclass Worker (same
-    // "Work library deps" pairing that common and leanbackassistant use).
-    stmobileImplementation 'com.google.guava:guava:' + guavaVersion
 }
