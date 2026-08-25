@@ -261,11 +261,12 @@ public class VideoLoaderController extends BasePlayerController
                         break;
                     }
                     case 6: {
-                        if (!video.hasPlaylist() && !video.belongsToChannelUploads() && !video.belongsToChannel())
-                        final VideoGroup group = video.getGroup();
-                        if (group != null && group.indexOf(video) != 0) {
-                            this.onPreviousClicked();
-                            break;
+                        if (!video.hasPlaylist() && !video.belongsToChannelUploads() && !video.belongsToChannel()) {
+                            final VideoGroup group = video.getGroup();
+                            if (group != null && group.indexOf(video) != 0) {
+                                this.onPreviousClicked();
+                                break;
+                            }
                         }
                         break;
                     }
