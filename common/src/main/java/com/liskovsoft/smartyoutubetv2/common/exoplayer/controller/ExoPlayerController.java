@@ -22,7 +22,6 @@ import com.liskovsoft.smartyoutubetv2.common.app.models.data.Video;
 import com.liskovsoft.smartyoutubetv2.common.app.models.playback.listener.PlayerEventListener;
 import com.liskovsoft.smartyoutubetv2.common.exoplayer.ExoMediaSourceFactory;
 import com.liskovsoft.smartyoutubetv2.common.exoplayer.errors.TrackErrorFixer;
-import com.liskovsoft.smartyoutubetv2.common.exoplayer.other.VolumeBooster;
 import com.liskovsoft.smartyoutubetv2.common.exoplayer.selector.ExoFormatItem;
 import com.liskovsoft.smartyoutubetv2.common.exoplayer.selector.FormatItem;
 import com.liskovsoft.smartyoutubetv2.common.exoplayer.selector.TrackInfoFormatter2;
@@ -50,7 +49,6 @@ public class ExoPlayerController implements Player.Listener {
     private final PlayerEventListener mEventListener;
     private ExoPlayer mPlayer;
     private PlayerView mPlayerView;
-    private VolumeBooster mVolumeBooster;
     private boolean mIsEnded;
     private Runnable mOnVideoLoaded;
     private androidx.media3.exoplayer.ExoPlayer mTranslationPlayer;
@@ -516,24 +514,6 @@ public class ExoPlayerController implements Player.Listener {
         }
     }
 
-    private void applyVolumeBoost(float volume) {
-        if (mPlayer == null) {
-            return;
-        }
-
-        if (mVolumeBooster != null) {
-            mPlayer.removeAudioListener(mVolumeBooster);
-            mVolumeBooster = null;
-        }
-
-        // 5.1 audio cannot be boosted (format isn't supported error)
-        // also, other 2.0 tracks in 5.1 group is already too loud. so cancel them too.
-        if (volume > 1f && !contains51Audio() && Build.VERSION.SDK_INT >= 19) {
-            mVolumeBooster = new VolumeBooster(true, volume, null);
-            mPlayer.addAudioListener(mVolumeBooster);
-        }
-    }
-    
     private boolean contains51Audio() {
         if (mTrackSelectorManager == null || mTrackSelectorManager.getAudioTracks() == null) {
             return false;

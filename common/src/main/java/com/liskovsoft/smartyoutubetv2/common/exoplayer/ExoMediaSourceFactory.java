@@ -276,7 +276,7 @@ public class ExoMediaSourceFactory {
                         new CronetEngineWrapper(CronetManager.getEngine(mContext)),
                         Executors.newSingleThreadExecutor())
                         .setTransferListener(bandwidthMeter)
-                        .setConnectTimeoutMs((int) OkHttpManager.getConnectTimeoutMs())
+                        .setConnectionTimeoutMs((int) OkHttpManager.getConnectTimeoutMs())
                         .setReadTimeoutMs((int) OkHttpManager.getReadTimeoutMs())
                         .setHandleSetCookieRequests(true)
                         .setUserAgent(USER_AGENT);
@@ -291,7 +291,7 @@ public class ExoMediaSourceFactory {
         DefaultHttpDataSource.Factory dataSourceFactory = new DefaultHttpDataSource.Factory()
                 .setUserAgent(USER_AGENT)
                 .setTransferListener(bandwidthMeter)
-                .setConnectTimeoutMs((int) OkHttpManager.getConnectTimeoutMs())
+                .setConnectionTimeoutMs((int) OkHttpManager.getConnectTimeoutMs())
                 .setReadTimeoutMs((int) OkHttpManager.getReadTimeoutMs())
                 .setAllowCrossProtocolRedirects(true); // allowCrossProtocolRedirects = true
 

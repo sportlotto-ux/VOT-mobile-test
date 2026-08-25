@@ -7,10 +7,12 @@ import androidx.annotation.NonNull;
 
 import androidx.media3.common.C;
 import androidx.media3.common.Format;
-import androidx.media3.common.drm.DrmInitData;
-import androidx.media3.common.drm.DrmInitData.SchemeData;
+import androidx.media3.common.DrmInitData;
+import androidx.media3.common.DrmInitData.SchemeData;
 import androidx.media3.exoplayer.dash.manifest.AdaptationSet;
 import androidx.media3.exoplayer.dash.manifest.BaseUrl;
+import androidx.media3.exoplayer.dash.manifest.RangedUri;
+import androidx.media3.exoplayer.dash.manifest.SegmentBase;
 import androidx.media3.exoplayer.dash.manifest.DashManifest;
 import androidx.media3.exoplayer.dash.manifest.Period;
 import androidx.media3.exoplayer.dash.manifest.Representation;
@@ -41,7 +43,7 @@ import java.util.TreeSet;
  * Port of the SmartTube DashManifestParser2 (ExoPlayer 2.10 fork) to the media3 manifest model.
  */
 public class DashManifestParser3 {
-    private static final String TAG = DashManifestParser2.class.getSimpleName();
+    private static final String TAG = DashManifestParser3.class.getSimpleName();
     private int mId;
     private static final String NULL_INDEX_RANGE = "0-0";
     private static final String NULL_CONTENT_LENGTH = "0";
@@ -530,7 +532,6 @@ public class DashManifestParser3 {
                         .setCodecs(codecs)
                         .setAverageBitrate(bitrate)
                         .setChannelCount(audioChannels)
-                        .setAudioSamplingRate(audioSamplingRate)
                         .setSelectionFlags(selectionFlags)
                         .setRoleFlags(roleFlags)
                         .setLanguage(language)
