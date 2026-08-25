@@ -31,15 +31,7 @@ if (keystorePropertiesFile.exists()) {
 }
 
 // The first letter of the flavor name must be in uppercase
-def isVotube = getGradle().getStartParameter().getTaskRequests().toString().contains("app.votube")
-if (!isVotube && new File("${projectDir}/google-services.json").exists() && (getGradle().getStartParameter().getTaskRequests().toString().contains("Stbeta") ||
-        getGradle().getStartParameter().getTaskRequests().toString().contains("Ststable"))) {
-    // Google Services Gradle plugin (transforms google-services.json file)
-    apply plugin: 'com.google.gms.google-services'
 
-    // Apply the Crashlytics Gradle plugin
-    apply plugin: 'com.google.firebase.crashlytics'
-}
 
 android {
     // FIX: Default interface methods are only supported starting with Android N (--min-api 24)
