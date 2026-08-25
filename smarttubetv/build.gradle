@@ -196,10 +196,11 @@ dependencies {
 
     //////// BEGIN EXOPLAYER /////////
 
-    implementation project(':exoplayer-library-core')
-    implementation project(':exoplayer-library-ui')
-    implementation project(':exoplayer-extension-leanback')
-    implementation project(':exoplayer-extension-mediasession')
+    // TODO(media3): remove old exoplayer deps after full migration
+    // implementation project(':exoplayer-library-core')
+    // implementation project(':exoplayer-library-ui')
+    // implementation project(':exoplayer-extension-leanback')
+    // implementation project(':exoplayer-extension-mediasession')
 
     // implementation 'com.amazon.android:exoplayer:' + amazonExoplayerVersion
     // implementation 'com.amazon.android:extension-leanback:' + amazonExoplayerVersion

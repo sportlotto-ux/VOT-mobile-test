@@ -14,13 +14,13 @@
     <!-- Original place for VideoSurfaceView -->
 
     <!-- Add subtitle view. Hides all views behind them. Should be placed at the top. -->
-    <com.google.android.exoplayer2.ui.AspectRatioFrameLayout
+    <com.liskovsoft.smartyoutubetv2.tv.ui.widgets.aspectratio.AspectRatioFrameLayout
         android:id="@+id/surface_root"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:layout_gravity="center">
         <!-- Modified place for VideoSurfaceView -->
-    </com.google.android.exoplayer2.ui.AspectRatioFrameLayout>
+    </com.liskovsoft.smartyoutubetv2.tv.ui.widgets.aspectratio.AspectRatioFrameLayout>
 
     <!-- MOD: fix subs width issues on vertical videos by placing subs outside of the aspect layout -->
     <!-- MOD: add subtitle padding -->

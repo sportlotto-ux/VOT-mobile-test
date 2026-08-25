@@ -70,9 +70,10 @@ dependencies {
 
     //////// BEGIN EXOPLAYER /////////
 
-    implementation project(':exoplayer-library')
-    implementation project(':exoplayer-extension-okhttp')
-    implementation project(':exoplayer-extension-cronet')
+    // TODO(media3): remove old exoplayer deps after full migration
+    // implementation project(':exoplayer-library')
+    // implementation project(':exoplayer-extension-okhttp')
+    // implementation project(':exoplayer-extension-cronet')
 
     // Media3 player stack (migration from the old ExoPlayer 2.10 fork)
     def media3Version = '1.4.1'
