@@ -219,8 +219,14 @@ public class ExoPlayerController implements Player.EventListener {
      */
     public void setPositionMs(long positionMs) {
         // Url list videos at load stage has undefined (-1) length. So, we need to remove length check.
-        if (mPlayer != null && positionMs >= 0 && positionMs <= getDurationMs()) {
-            mPlayer.seekTo(positionMs);
+        if (mPlayer != null && positionMs >= 0) {
+            long dur = getDurationMs();
+            if (dur == -1 || positionMs <= dur) {
+                mPlayer.seekTo(positionMs);
+            } else {
+                // clamp if exceed
+                mPlayer.seekTo(dur);
+            }
         }
         if (mTranslationPlayer != null && mTranslationOverlayActive && positionMs >= 0) {
             try {

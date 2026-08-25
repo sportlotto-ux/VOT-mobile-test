@@ -679,6 +679,12 @@ public class VideoLoaderController extends BasePlayerController {
     public boolean reopenWithTranslationAudio(String url) {
         com.liskovsoft.smartyoutubetv2.common.app.views.PlaybackView player = getPlayer();
         if (player != null && url != null) {
+            // Overlay implementation: if video already playing keep position, just attach second player
+            if (player.containsMedia()) {
+                android.util.Log.e("VOT_UI", "reopenWithTranslationAudio attach (keep position) url=" + url);
+                player.attachTranslationAudio(url);
+                return true;
+            }
             int type = effectiveOpenTypeForTranslation();
             if (type == 1 && mLastFormatInfo != null) {
                 player.openDashWithTranslationAudio(mLastFormatInfo, url);
@@ -686,10 +692,6 @@ public class VideoLoaderController extends BasePlayerController {
             }
             if (type == 2 && mLastFormatInfo != null) {
                 player.openSabrWithTranslationAudio(mLastFormatInfo, url);
-                return true;
-            }
-            if (player.containsMedia()) {
-                player.attachTranslationAudio(url);
                 return true;
             }
         }
