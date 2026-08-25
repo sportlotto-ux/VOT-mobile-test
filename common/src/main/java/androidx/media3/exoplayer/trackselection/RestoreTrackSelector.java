@@ -2,7 +2,7 @@ package androidx.media3.exoplayer.trackselection;
 
 import android.util.Pair;
 import androidx.annotation.Nullable;
-import androidx.media3.common.TrackGroupArray;
+import androidx.media3.exoplayer.source.TrackGroupArray;
 import com.liskovsoft.smartyoutubetv2.common.exoplayer.selector.TrackSelectorManager;
 import com.liskovsoft.smartyoutubetv2.common.exoplayer.selector.track.MediaTrack;
 

@@ -17,7 +17,7 @@ public interface PlayerEngineEventListener {
     /**
      * The error was an unexpected
      */
-    int ERROR_TYPE_UNEXPECTED = ExoPlaybackException.TYPE_UNEXPECTED;
+    int TYPE_UNEXPECTED = ExoPlaybackException.TYPE_UNEXPECTED;
     /**
      * The error occurred in a remote component.
      */
@@ -25,7 +25,7 @@ public interface PlayerEngineEventListener {
     /**
      * The error was an {@link OutOfMemoryError}.
      */
-    int ERROR_TYPE_OUT_OF_MEMORY = ExoPlaybackException.ERROR_TYPE_UNEXPECTED;
+    int ERROR_TYPE_OUT_OF_MEMORY = ExoPlaybackException.TYPE_UNEXPECTED;
     int RENDERER_INDEX_UNKNOWN = TrackSelectorManager.RENDERER_INDEX_UNKNOWN;
     int RENDERER_INDEX_VIDEO = TrackSelectorManager.RENDERER_INDEX_VIDEO;
     int RENDERER_INDEX_AUDIO = TrackSelectorManager.RENDERER_INDEX_AUDIO;

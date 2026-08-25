@@ -6,6 +6,7 @@ import android.net.Uri;
 import android.text.TextUtils;
 import androidx.annotation.NonNull;
 import androidx.media3.common.C;
+import androidx.media3.common.MediaItem;
 import androidx.media3.datasource.DataSource;
 import androidx.media3.datasource.DefaultDataSource;
 import androidx.media3.datasource.DefaultHttpDataSource;
@@ -106,7 +107,7 @@ public class ExoMediaSourceFactory {
      * @return A new DataSource factory.
      */
     private DataSource.Factory buildDataSourceFactory(boolean useBandwidthMeter) {
-        BandwidthMeter bandwidthMeter = useBandwidthMeter ? BANDWIDTH_METER : null;
+        DefaultBandwidthMeter bandwidthMeter = useBandwidthMeter ? BANDWIDTH_METER : null;
         return new DefaultDataSource.Factory(mContext, buildHttpDataSourceFactory(useBandwidthMeter))
                 .setTransferListener(bandwidthMeter);
     }
@@ -121,7 +122,7 @@ public class ExoMediaSourceFactory {
     private HttpDataSource.Factory buildHttpDataSourceFactory(boolean useBandwidthMeter) {
         PlayerTweaksData tweaksData = PlayerTweaksData.instance(mContext);
         int source = tweaksData.getPlayerDataSource();
-        BandwidthMeter bandwidthMeter = useBandwidthMeter ? BANDWIDTH_METER : null;
+        DefaultBandwidthMeter bandwidthMeter = useBandwidthMeter ? BANDWIDTH_METER : null;
         return source == PlayerTweaksData.PLAYER_DATA_SOURCE_OKHTTP ? buildOkHttpDataSourceFactory(bandwidthMeter) :
                         source == PlayerTweaksData.PLAYER_DATA_SOURCE_CRONET && CronetManager.getEngine(mContext) != null ? buildCronetDataSourceFactory(bandwidthMeter) :
                                 buildDefaultHttpDataSourceFactory(bandwidthMeter);
@@ -137,7 +138,7 @@ public class ExoMediaSourceFactory {
                                 getSsChunkSourceFactory(),
                                 getMediaDataSourceFactory()
                         )
-                                .createMediaSource(uri);
+                                .createMediaSource(MediaItem.fromUri(uri));
                 if (mTrackErrorFixer != null) {
                     ssSource.addEventListener(Utils.sHandler, mTrackErrorFixer);
                 }
@@ -150,13 +151,13 @@ public class ExoMediaSourceFactory {
                         )
                                 .setManifestParser(new LiveDashManifestParser()) // Don't make static! Need state reset for each live source.
                                 .setLoadErrorHandlingPolicy(new DashDefaultLoadErrorHandlingPolicy())
-                                .createMediaSource(uri);
+                                .createMediaSource(MediaItem.fromUri(uri));
                 if (mTrackErrorFixer != null) {
                     dashSource.addEventListener(Utils.sHandler, mTrackErrorFixer);
                 }
                 return dashSource;
             case C.TYPE_HLS:
-                HlsMediaSource hlsSource = new HlsMediaSource.Factory(getMediaDataSourceFactory()).createMediaSource(uri);
+                HlsMediaSource hlsSource = new HlsMediaSource.Factory(getMediaDataSourceFactory()).createMediaSource(MediaItem.fromUri(uri));
                 if (mTrackErrorFixer != null) {
                     hlsSource.addEventListener(Utils.sHandler, mTrackErrorFixer);
                 }
@@ -164,7 +165,7 @@ public class ExoMediaSourceFactory {
             case C.TYPE_OTHER:
                 ProgressiveMediaSource extractorSource = new ProgressiveMediaSource.Factory(getMediaDataSourceFactory())
                         .setExtractorsFactory(new DefaultExtractorsFactory())
-                        .createMediaSource(uri);
+                        .createMediaSource(MediaItem.fromUri(uri));
                 if (mTrackErrorFixer != null) {
                     extractorSource.addEventListener(Utils.sHandler, mTrackErrorFixer);
                 }
@@ -228,7 +229,7 @@ public class ExoMediaSourceFactory {
     }
 
     private DashManifest getManifest(MediaItemFormatInfo formatInfo) {
-        DashManifestParser2 parser = new DashManifestParser2();
+        DashManifestParser parser = new DashManifestParser();
         return parser.parse(formatInfo);
     }
 
@@ -257,7 +258,7 @@ public class ExoMediaSourceFactory {
     /**
      * Use OkHttp for networking
      */
-    private HttpDataSource.Factory buildOkHttpDataSourceFactory(BandwidthMeter bandwidthMeter) {
+    private HttpDataSource.Factory buildOkHttpDataSourceFactory(DefaultBandwidthMeter bandwidthMeter) {
         OkHttpDataSource.Factory dataSourceFactory = new OkHttpDataSource.Factory(OkHttpManager.instance().getClient())
                 .setUserAgent(USER_AGENT)
                 .setTransferListener(bandwidthMeter);
@@ -265,7 +266,7 @@ public class ExoMediaSourceFactory {
         return dataSourceFactory;
     }
 
-    private HttpDataSource.Factory buildCronetDataSourceFactory(BandwidthMeter bandwidthMeter) {
+    private HttpDataSource.Factory buildCronetDataSourceFactory(DefaultBandwidthMeter bandwidthMeter) {
         CronetDataSource.Factory dataSourceFactory =
                 new CronetDataSource.Factory(
                         new CronetEngineWrapper(CronetManager.getEngine(mContext)),
@@ -282,7 +283,7 @@ public class ExoMediaSourceFactory {
     /**
      * Use built-in component for networking
      */
-    private HttpDataSource.Factory buildDefaultHttpDataSourceFactory(BandwidthMeter bandwidthMeter) {
+    private HttpDataSource.Factory buildDefaultHttpDataSourceFactory(DefaultBandwidthMeter bandwidthMeter) {
         DefaultHttpDataSource.Factory dataSourceFactory = new DefaultHttpDataSource.Factory()
                 .setUserAgent(USER_AGENT)
                 .setTransferListener(bandwidthMeter)

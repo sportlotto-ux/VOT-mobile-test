@@ -7,7 +7,7 @@ import android.os.Build.VERSION;
 
 import androidx.annotation.NonNull;
 
-import androidx.media3.common.text.CaptionStyleCompat;
+import androidx.media3.ui.CaptionStyleCompat;
 import com.liskovsoft.sharedutils.helpers.DeviceHelpers;
 import com.liskovsoft.sharedutils.helpers.Helpers;
 import com.liskovsoft.sharedutils.locale.LocaleUtility;

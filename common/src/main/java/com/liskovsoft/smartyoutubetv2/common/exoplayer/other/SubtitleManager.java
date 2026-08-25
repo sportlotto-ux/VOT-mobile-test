@@ -11,9 +11,9 @@ import android.view.accessibility.CaptioningManager.CaptionStyle;
 
 import androidx.annotation.RequiresApi;
 import androidx.core.content.ContextCompat;
-import androidx.media3.common.text.CaptionStyleCompat;
+import androidx.media3.ui.CaptionStyleCompat;
 import androidx.media3.common.text.Cue;
-import androidx.media3.common.text.TextOutput;
+import androidx.media3.exoplayer.text.TextOutput;
 import androidx.media3.ui.SubtitleView;
 import com.liskovsoft.sharedutils.helpers.Helpers;
 import com.liskovsoft.smartyoutubetv2.common.R;
