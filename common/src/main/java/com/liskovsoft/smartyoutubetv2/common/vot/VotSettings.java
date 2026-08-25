@@ -4,7 +4,7 @@
 
 package com.liskovsoft.smartyoutubetv2.common.vot;
 
-import android.content.SharedPreferences$Editor;
+import android.content.SharedPreferences;
 import android.content.Context;
 import android.content.SharedPreferences;
 
@@ -37,7 +37,7 @@ public final class VotSettings
     }
     
     private void migrateDefaultsIfNeeded() {
-        final SharedPreferences$Editor edit = this.mPrefs.edit();
+        final SharedPreferences.Editor edit = this.mPrefs.edit();
         final SharedPreferences mPrefs = this.mPrefs;
         int n = 0;
         final boolean boolean1 = mPrefs.getBoolean("lively_default_off_20260326", false);

@@ -25,14 +25,14 @@ import com.google.android.exoplayer2.source.TrackGroupArray;
 import com.google.android.exoplayer2.Timeline;
 import com.google.android.exoplayer2.ExoPlaybackException;
 import com.google.android.exoplayer2.PlaybackParameters;
-import com.google.android.exoplayer2.Player$EventListener$_CC;
+
 import com.google.android.exoplayer2.trackselection.TrackSelector;
 import com.google.android.exoplayer2.RenderersFactory;
 import com.google.android.exoplayer2.ExoPlayerFactory;
 import com.google.android.exoplayer2.trackselection.DefaultTrackSelector;
 import com.google.android.exoplayer2.DefaultRenderersFactory;
 import com.google.android.exoplayer2.source.MediaSource;
-import android.os.Build$VERSION;
+import android.os.Build;
 import com.google.android.exoplayer2.audio.AudioListener;
 import com.liskovsoft.smartyoutubetv2.common.prefs.PlayerData;
 import com.liskovsoft.smartyoutubetv2.common.exoplayer.selector.track.MediaTrack;
@@ -48,9 +48,9 @@ import com.google.android.exoplayer2.SimpleExoPlayer;
 import com.liskovsoft.smartyoutubetv2.common.exoplayer.ExoMediaSourceFactory;
 import com.liskovsoft.smartyoutubetv2.common.app.models.playback.listener.PlayerEventListener;
 import android.content.Context;
-import com.google.android.exoplayer2.Player$EventListener;
+import com.google.android.exoplayer2.Player;
 
-public class ExoPlayerController implements Player$EventListener
+public class ExoPlayerController implements Player.EventListener
 {
     private static final String TAG = "ExoPlayerController";
     private static final float TRANSLATION_LOUDNESS_COMPENSATION = 1.8f;
@@ -138,7 +138,7 @@ public class ExoPlayerController implements Player$EventListener
             mPlayer.removeAudioListener((AudioListener)mVolumeBooster);
             this.mVolumeBooster = null;
         }
-        if (n > 1.0f && !this.contains51Audio() && Build$VERSION.SDK_INT >= 19) {
+        if (n > 1.0f && !this.contains51Audio() && Build.VERSION.SDK_INT >= 19) {
             final VolumeBooster mVolumeBooster2 = new VolumeBooster(true, n, null);
             this.mVolumeBooster = mVolumeBooster2;
             this.mPlayer.addAudioListener((AudioListener)mVolumeBooster2);
@@ -668,7 +668,7 @@ public class ExoPlayerController implements Player$EventListener
     public void setTrackSelector(final DefaultTrackSelector trackSelector) {
         this.mTrackSelectorManager.setTrackSelector(trackSelector);
         final Context mContext = this.mContext;
-        if (mContext != null && trackSelector != null && PlayerTweaksData.instance(mContext).isTunneledPlaybackEnabled() && Build$VERSION.SDK_INT >= 21) {
+        if (mContext != null && trackSelector != null && PlayerTweaksData.instance(mContext).isTunneledPlaybackEnabled() && Build.VERSION.SDK_INT >= 21) {
             trackSelector.setParameters(trackSelector.buildUponParameters().setTunnelingAudioSessionId(C.generateAudioSessionIdV21(this.mContext)));
         }
     }
