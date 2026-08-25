@@ -31,7 +31,8 @@ if (keystorePropertiesFile.exists()) {
 }
 
 // The first letter of the flavor name must be in uppercase
-if (new File("${projectDir}/google-services.json").exists() && (getGradle().getStartParameter().getTaskRequests().toString().contains("Stbeta") ||
+def isVotube = getGradle().getStartParameter().getTaskRequests().toString().contains("app.votube")
+if (!isVotube && new File("${projectDir}/google-services.json").exists() && (getGradle().getStartParameter().getTaskRequests().toString().contains("Stbeta") ||
         getGradle().getStartParameter().getTaskRequests().toString().contains("Ststable"))) {
     // Google Services Gradle plugin (transforms google-services.json file)
     apply plugin: 'com.google.gms.google-services'
