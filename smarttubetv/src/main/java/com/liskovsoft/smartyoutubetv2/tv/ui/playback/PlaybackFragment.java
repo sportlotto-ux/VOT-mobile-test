@@ -604,6 +604,8 @@ public class PlaybackFragment extends SeekModePlaybackFragment implements Playba
         mMediaSession = new MediaSessionCompat(getContext().getApplicationContext(), getContext().getPackageName()); // NOTE: mem leak fix (SegmentTimelineElement)
         mMediaSession.setActive(!disableNotifications);
         // TODO(media3): restore media notification integration via androidx.media3.session.MediaSession
+    }
+
     private void initializePlayerRows() {
         mRowsSupportFragment = (RowsSupportFragment) getChildFragmentManager().findFragmentById(
                 R.id.playback_controls_dock);
