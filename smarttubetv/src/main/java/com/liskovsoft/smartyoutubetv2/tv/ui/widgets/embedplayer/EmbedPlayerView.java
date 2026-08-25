@@ -162,6 +162,9 @@ public class EmbedPlayerView extends PlayerView implements PlaybackView {
     }
 
     @Override
+    public void setVoiceOverTranslateStatus(String status) { }
+
+    @Override
     public void setSeekPreviewTitle(String title) {
 
     }
@@ -293,6 +296,26 @@ public class EmbedPlayerView extends PlayerView implements PlaybackView {
     @Override
     public void openMerged(InputStream dashManifest, String hlsPlaylistUrl) {
         mExoPlayerController.openMerged(dashManifest, hlsPlaylistUrl);
+    }
+
+    @Override
+    public void openSabrWithTranslationAudio(MediaItemFormatInfo formatInfo, String translationUrl) {
+        mExoPlayerController.openSabrWithTranslationAudio(formatInfo, translationUrl);
+    }
+
+    @Override
+    public void openDashWithTranslationAudio(MediaItemFormatInfo formatInfo, String translationUrl) {
+        mExoPlayerController.openDashWithTranslationAudio(formatInfo, translationUrl);
+    }
+
+    @Override
+    public void attachTranslationAudio(String url) {
+        mExoPlayerController.attachTranslationAudio(url);
+    }
+
+    @Override
+    public void clearTranslationAudio() {
+        mExoPlayerController.clearTranslationAudio();
     }
 
     @Override

@@ -11,6 +11,7 @@ public interface PlayerUI {
     int BUTTON_OFF = 0;
     int BUTTON_ON = 1;
     int BUTTON_DISABLED = -1;
+    int BUTTON_WAITING = 2;
     void updateSuggestions(VideoGroup group);
     void removeSuggestions(VideoGroup group);
     int getSuggestionsIndex(VideoGroup group);
@@ -39,4 +40,5 @@ public interface PlayerUI {
     void setSeekBarSegments(List<SeekBarSegment> segments);
     void updateEndingTime();
     void setChatReceiver(ChatReceiver chatReceiver);
+    void setVoiceOverTranslateStatus(String status);
 }

@@ -15,6 +15,10 @@ public interface PlayerEngine extends PlayerConstants {
     void openUrlList(List<String> urlList);
     void openMerged(MediaItemFormatInfo formatInfo, String hlsPlaylistUrl);
     void openMerged(InputStream dashManifest, String hlsPlaylistUrl);
+    void openSabrWithTranslationAudio(MediaItemFormatInfo formatInfo, String translationUrl);
+    void openDashWithTranslationAudio(MediaItemFormatInfo formatInfo, String translationUrl);
+    void attachTranslationAudio(String url);
+    void clearTranslationAudio();
     long getPositionMs();
     void setPositionMs(long positionMs);
     long getDurationMs();

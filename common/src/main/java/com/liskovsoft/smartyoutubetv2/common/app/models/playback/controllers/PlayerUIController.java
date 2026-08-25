@@ -40,6 +40,7 @@ import com.liskovsoft.smartyoutubetv2.common.prefs.PlayerData;
 import com.liskovsoft.smartyoutubetv2.common.prefs.SearchData;
 import com.liskovsoft.smartyoutubetv2.common.utils.AppDialogUtil;
 import com.liskovsoft.smartyoutubetv2.common.utils.Utils;
+import com.liskovsoft.smartyoutubetv2.common.vot.VotSettings;
 import com.liskovsoft.youtubeapi.service.YouTubeServiceManager;
 import com.liskovsoft.youtubeapi.service.YouTubeSignInService;
 import io.reactivex.Observable;
@@ -620,7 +621,29 @@ public class PlayerUIController extends BasePlayerController {
             onDislikeClicked(buttonState);
         } else if (buttonId == R.id.action_thumbs_up) {
             onLikeClicked(buttonState);
+        } else if (buttonId == R.id.action_voice_over_translate) {
+            onVoiceOverTranslateClicked();
         }
+    }
+
+    private void onVoiceOverTranslateClicked() {
+        VoiceOverTranslationController controller = getController(VoiceOverTranslationController.class);
+        if (controller != null) controller.requestTranslation();
+    }
+
+    private void onVoiceOverTranslateLongClicked() {
+        if (getContext() == null) return;
+        VotSettings settings = VotSettings.instance(getContext());
+        AppDialogPresenter dialog = getAppDialogPresenter();
+        fitVideoIntoDialog();
+        // lively voice toggle
+        dialog.appendSingleSwitch(UiOptionItem.from(getContext().getString(R.string.voice_over_translate_lively_voice), opt -> {
+            settings.setUseLivelyVoice(opt.isSelected());
+            if (getController(VoiceOverTranslationController.class) != null) getController(VoiceOverTranslationController.class).requestTranslation();
+        }, settings.isUseLivelyVoice()));
+        // volume categories simplified
+        dialog.appendSingleButton(UiOptionItem.from(getContext().getString(R.string.voice_over_translate_settings), opt -> dialog.showDialog(getContext().getString(R.string.voice_over_translate_settings))));
+        dialog.showDialog(getContext().getString(R.string.voice_over_translate_settings));
     }
 
     @Override
@@ -637,6 +660,8 @@ public class PlayerUIController extends BasePlayerController {
             showPlaybackModeDialog();
         } else if (buttonId == R.id.lb_control_closed_captioning) {
             onSubtitleLongClicked();
+        } else if (buttonId == R.id.action_voice_over_translate) {
+            onVoiceOverTranslateLongClicked();
         }
     }
 

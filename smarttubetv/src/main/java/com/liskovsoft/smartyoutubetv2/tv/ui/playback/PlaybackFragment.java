@@ -978,6 +978,26 @@ public class PlaybackFragment extends SeekModePlaybackFragment implements Playba
     }
 
     @Override
+    public void openSabrWithTranslationAudio(MediaItemFormatInfo formatInfo, String translationUrl) {
+        mExoPlayerController.openSabrWithTranslationAudio(formatInfo, translationUrl);
+    }
+
+    @Override
+    public void openDashWithTranslationAudio(MediaItemFormatInfo formatInfo, String translationUrl) {
+        mExoPlayerController.openDashWithTranslationAudio(formatInfo, translationUrl);
+    }
+
+    @Override
+    public void attachTranslationAudio(String url) {
+        mExoPlayerController.attachTranslationAudio(url);
+    }
+
+    @Override
+    public void clearTranslationAudio() {
+        mExoPlayerController.clearTranslationAudio();
+    }
+
+    @Override
     public long getPositionMs() {
         return mExoPlayerController.getPositionMs();
     }
@@ -1322,6 +1342,16 @@ public class PlaybackFragment extends SeekModePlaybackFragment implements Playba
     public void setChannelIcon(String iconUrl) {
         if (mPlayerGlue != null) {
             mPlayerGlue.setChannelIcon(iconUrl);
+        }
+    }
+
+    @Override
+    public void setVoiceOverTranslateStatus(String status) {
+        // VTube overlay: show translation status as seek preview title if needed
+        // Fallback to no-op if view not present
+        if (status != null && !status.isEmpty() && mPlayerGlue != null) {
+            // Use debug overlay or just log
+            android.util.Log.d("VOT_UI", status);
         }
     }
 
