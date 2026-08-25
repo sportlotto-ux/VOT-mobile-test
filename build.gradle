@@ -50,7 +50,7 @@ allprojects {
             }
         }
     }
-}
+
     configurations.all {
         // WorkManager conflict resolution (lint exception: old java runtime)
         // resolutionStrategy.force 'androidx.lifecycle:lifecycle-livedata-core:' + liveDataVersion
