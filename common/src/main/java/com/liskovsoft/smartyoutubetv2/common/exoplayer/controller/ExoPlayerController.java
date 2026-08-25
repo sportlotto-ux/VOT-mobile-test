@@ -217,6 +217,12 @@ public class ExoPlayerController implements Player.EventListener {
         if (mPlayer != null && positionMs >= 0 && positionMs <= getDurationMs()) {
             mPlayer.seekTo(positionMs);
         }
+        if (mTranslationPlayer != null && mTranslationOverlayActive && positionMs >= 0) {
+            try {
+                android.util.Log.e("VOT_SYNC", "seek sync pos=" + positionMs);
+                mTranslationPlayer.seekTo(positionMs);
+            } catch (Exception e) { android.util.Log.e("VOT_SYNC", "seek fail", e); }
+        }
     }
 
     public long getDurationMs() {
@@ -433,8 +439,16 @@ public class ExoPlayerController implements Player.EventListener {
 
     @Override
     public void onPositionDiscontinuity(int reason) {
-        Log.e(TAG, "onPositionDiscontinuity");
-
+        Log.e(TAG, "onPositionDiscontinuity reason=" + reason);
+        if (mTranslationPlayer != null && mTranslationOverlayActive && mPlayer != null) {
+            long pos = mPlayer.getCurrentPosition();
+            try {
+                android.util.Log.e("VOT_SYNC", "discontinuity sync pos=" + pos + " reason=" + reason);
+                mTranslationPlayer.seekTo(pos);
+                mTranslationPlayer.setPlayWhenReady(mPlayer.getPlayWhenReady());
+                mTranslationPlayer.setPlaybackParameters(mPlayer.getPlaybackParameters());
+            } catch (Exception e) { android.util.Log.e("VOT_SYNC", "disc sync fail", e); }
+        }
         // Fix video loop on 480p with legacy codes enabled
         if (reason == Player.DISCONTINUITY_REASON_PERIOD_TRANSITION) {
             mPlayer.stop();
@@ -444,6 +458,13 @@ public class ExoPlayerController implements Player.EventListener {
 
     @Override
     public void onSeekProcessed() {
+        if (mTranslationPlayer != null && mTranslationOverlayActive && mPlayer != null) {
+            long pos = mPlayer.getCurrentPosition();
+            try {
+                android.util.Log.e("VOT_SYNC", "seekProcessed sync pos=" + pos);
+                mTranslationPlayer.seekTo(pos);
+            } catch (Exception e) { android.util.Log.e("VOT_SYNC", "seekProcessed fail", e); }
+        }
         mEventListener.onSeekEnd();
     }
 
@@ -462,7 +483,9 @@ public class ExoPlayerController implements Player.EventListener {
             } else {
                 mPlayer.setPlaybackParameters(new PlaybackParameters(speed, speed));
             }
-
+            if (mTranslationPlayer != null && mTranslationOverlayActive) {
+                try { mTranslationPlayer.setPlaybackParameters(mPlayer.getPlaybackParameters()); android.util.Log.e("VOT_SYNC", "speed sync " + speed); } catch (Exception e) {}
+            }
             mTrackFormatter.setSpeed(speed);
             setQualityInfo(mTrackFormatter.getQualityLabel());
             mEventListener.onSpeedChanged(speed);
