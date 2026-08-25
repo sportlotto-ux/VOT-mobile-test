@@ -74,21 +74,31 @@ public class VoiceOverTranslationController extends BasePlayerController {
         String title = video.getTitle() != null ? video.getTitle() : "";
         int durationSec = video.getDurationMs() > 0 ? (int)(video.getDurationMs()/1000) : 300;
 
+        runTranslateWithRetry(videoUrl, title, durationSec, formatInfo, video, ctx, loader, 0);
+    }
+
+    private void runTranslateWithRetry(String videoUrl, String title, int durationSec, MediaItemFormatInfo formatInfo, Video video, Context ctx, VideoLoaderController loader, int retryCount) {
+        if (retryCount > 60) {
+            mRequestInProgress = false;
+            updateUiState();
+            if (ctx != null) MessageHelpers.showMessage(ctx, R.string.voice_over_translate_error);
+            return;
+        }
         new Thread(() -> {
             try {
                 Context c = getContext();
-                if (c == null) return;
+                if (c == null) {
+                    mHandler.post(() -> { mRequestInProgress = false; updateUiState(); });
+                    return;
+                }
                 VotApiServiceImpl service = new VotApiServiceImpl(c);
                 String requestLang = "auto";
-                Log.e("VOT_UI", "calling translate url=" + videoUrl);
+                Log.e("VOT_UI", "calling translate url=" + videoUrl + " retry=" + retryCount);
                 VotTranslateResult result = service.translate(videoUrl, title, durationSec, requestLang, "ru", formatInfo, video.videoId, progress -> {
                     Log.e("VOT_UI", "progress " + progress);
-                    mHandler.post(() -> {
-                    });
                 });
-                Log.e("VOT_UI", "translate result ready=" + (result != null ? result.isReady() : "null") + " url=" + (result != null ? result.url : "null") + " status=" + (result != null ? result.status : "null") + " msg=" + (result != null ? result.message : "null") + " debug=" + (result != null ? result.debug : "null"));
+                Log.e("VOT_UI", "translate result ready=" + (result != null ? result.isReady() : "null") + " url=" + (result != null ? result.url : "null") + " status=" + (result != null ? result.status : "null") + " msg=" + (result != null ? result.message : "null") + " debug=" + (result != null ? result.debug : "null") + " remaining=" + (result != null ? result.remainingTime : -1));
                 mHandler.post(() -> {
-                    mRequestInProgress = false;
                     if (result != null && result.isReady() && result.url != null) {
                         String proxied = VotSettings.instance(c).proxifyAudioUrl(result.url);
                         Log.e("VOT_UI", "reopenWithTranslationAudio proxied=" + proxied);
@@ -96,18 +106,36 @@ public class VoiceOverTranslationController extends BasePlayerController {
                         if (loader != null) ok = loader.reopenWithTranslationAudio(proxied);
                         Log.e("VOT_UI", "reopen ok=" + ok);
                         if (ok) {
+                            mRequestInProgress = false;
                             mTranslationEnabledForVideoId = video.videoId;
                             mTranslationAudioUrl = proxied;
                             MessageHelpers.showMessage(c, R.string.voice_over_translate_enabled);
+                            updateUiState();
                         } else {
+                            mRequestInProgress = false;
                             MessageHelpers.showMessage(c, R.string.voice_over_translate_error);
+                            updateUiState();
                         }
+                    } else if (result != null && ("WAITING".equalsIgnoreCase(result.status) || "LONG_WAITING".equalsIgnoreCase(result.status))) {
+                        // keep waiting state, schedule retry
+                        int delayMs = result.remainingTime > 0 ? Math.max(5000, Math.min(60000, result.remainingTime * 1000 + 2000)) : 5000;
+                        if (result.remainingTime > 0 && result.remainingTime <= 3) delayMs = 1000;
+                        Log.e("VOT_UI", "waiting, schedule retry in " + delayMs + " ms");
+                        MessageHelpers.showMessage(c, c.getString(R.string.voice_over_translate_in_progress) + " (" + result.remainingTime + "s)");
+                        mHandler.postDelayed(() -> runTranslateWithRetry(videoUrl, title, durationSec, formatInfo, video, ctx, loader, retryCount + 1), delayMs);
+                        // keep mRequestInProgress true, update UI to WAITING
+                        updateUiState();
                     } else {
-                        String msg = result != null && result.message != null ? result.message : c.getString(R.string.voice_over_translate_error);
+                        mRequestInProgress = false;
+                        String msg = result != null && result.message != null && !result.message.isEmpty() ? result.message : c.getString(R.string.voice_over_translate_error);
+                        // if debug contains more info, append
+                        if (result != null && result.debug != null && !result.debug.isEmpty() && (msg.equals(c.getString(R.string.voice_over_translate_error)) || msg.isEmpty())) {
+                            msg = msg + " (" + result.debug + ")";
+                        }
                         Log.e("VOT_UI", "translate failed msg=" + msg);
                         MessageHelpers.showMessage(c, msg);
+                        updateUiState();
                     }
-                    updateUiState();
                 });
             } catch (Exception e) {
                 Log.e("VOT_UI", "translate exception", e);

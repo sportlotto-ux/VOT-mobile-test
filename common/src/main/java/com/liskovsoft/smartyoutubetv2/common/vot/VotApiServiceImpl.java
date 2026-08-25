@@ -12,6 +12,7 @@ import okhttp3.Response;
 import android.annotation.SuppressLint;
 import android.util.Log;
 import java.nio.charset.Charset;
+import java.util.Locale;
 import java.util.concurrent.TimeUnit;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
@@ -48,25 +49,138 @@ public class VotApiServiceImpl implements VotApiService {
             String path = "/video-translation/translate";
             boolean useLively = false;
             try { useLively = VotSettings.instance(mContext).isUseLivelyVoice(); } catch (Exception ignored) {}
-            byte[] body = VotProtoUtils.encodeTranslationRequest(url, duration, requestLang, responseLang, title, false, useLively);
-            Log.e(TAG, "translate body len=" + body.length + " hex=" + hmacHex(HMAC_KEY, body).substring(0,8));
-            byte[] resp = postProtobuf(path, body);
-            if (resp == null) {
-                Log.e(TAG, "worker translate null (400) url=" + url);
-                return new VotTranslateResult(false, 0, null, "worker 400", "FAILED", "worker 400", null);
+            // sanitize langs like original
+            requestLang = sanitizeLanguage(requestLang, "auto");
+            responseLang = sanitizeLanguage(responseLang, "ru");
+            for (int attempt = 0; attempt < 3; attempt++) {
+                byte[] body = VotProtoUtils.encodeTranslationRequest(url, duration, requestLang, responseLang, title, true, useLively);
+                Log.e(TAG, "translate body len=" + body.length + " hex=" + hmacHex(HMAC_KEY, body).substring(0,8) + " poll=" + attempt);
+                byte[] resp = postProtobuf(path, body);
+                if (resp == null) {
+                    Log.e(TAG, "worker translate null (400) url=" + url + " attempt=" + attempt);
+                    if (attempt >= 2) return new VotTranslateResult(false, 0, null, "worker 400", "FAILED", "worker 400", null);
+                    // retry with new session on 401/403
+                    synchronized (this) { secretKey = null; }
+                    ensureSession();
+                    continue;
+                }
+                Log.e(TAG, "translate resp len=" + resp.length);
+                VotProtoUtils.TranslationResponse tr = VotProtoUtils.decodeTranslationResponse(resp);
+                String statusStr = statusToString(tr.status);
+                String dbg = buildDebug(tr, "poll=" + attempt);
+                Log.e(TAG, "translate result " + dbg + " statusStr=" + statusStr + " url=" + (tr.url != null ? tr.url.substring(0, Math.min(40, tr.url.length())) : "null"));
+                if (tr.status == VotProtoUtils.STATUS_FINISHED && tr.url != null && !tr.url.isEmpty()) {
+                    if (listener != null) listener.onProgress("ready");
+                    return new VotTranslateResult(true, Math.max(tr.remainingTime, 0), tr.url, tr.message, statusStr, dbg, tr.translationId);
+                }
+                if (tr.status == VotProtoUtils.STATUS_PART_CONTENT && tr.url != null && !tr.url.isEmpty()) {
+                    if (listener != null) listener.onProgress("partial_ready");
+                    return new VotTranslateResult(true, 0, tr.url, tr.message, statusStr, dbg, tr.translationId);
+                }
+                if (tr.status == VotProtoUtils.STATUS_WAITING || tr.status == VotProtoUtils.STATUS_LONG_WAITING) {
+                    int waitSec = tr.remainingTime > 0 ? tr.remainingTime : 5;
+                    // limit to 60s max per poll, add 2s buffer, and fast poll for first 12 attempts if small eta
+                    int sleepMs = Math.max(5000, Math.min(60000, waitSec * 1000 + 2000));
+                    if (waitSec <= 3 && attempt < 12) sleepMs = 1000;
+                    Log.e(TAG, "waiting status=" + statusStr + " eta=" + waitSec + " sleepMs=" + sleepMs);
+                    if (listener != null) listener.onProgress("waiting eta=" + waitSec + "s");
+                    // loop inside for waiting: poll until ready or timeout (max 180s)
+                    long deadline = System.currentTimeMillis() + Math.min(180000, waitSec * 1000 + 30000);
+                    // we stay inside outer loop but do inner polling
+                    while (System.currentTimeMillis() < deadline) {
+                        try { Thread.sleep(sleepMs); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); break; }
+                        // re-request same translation (Yandex will return updated status)
+                        body = VotProtoUtils.encodeTranslationRequest(url, duration, requestLang, responseLang, title, true, useLively);
+                        resp = postProtobuf(path, body);
+                        if (resp == null) {
+                            Log.e(TAG, "poll worker null");
+                            break;
+                        }
+                        tr = VotProtoUtils.decodeTranslationResponse(resp);
+                        statusStr = statusToString(tr.status);
+                        dbg = buildDebug(tr, "poll_wait");
+                        Log.e(TAG, "poll result " + dbg);
+                        if (tr.status == VotProtoUtils.STATUS_FINISHED && tr.url != null && !tr.url.isEmpty()) {
+                            return new VotTranslateResult(true, Math.max(tr.remainingTime, 0), tr.url, tr.message, statusStr, dbg, tr.translationId);
+                        }
+                        if (tr.status == VotProtoUtils.STATUS_PART_CONTENT && tr.url != null && !tr.url.isEmpty()) {
+                            return new VotTranslateResult(true, 0, tr.url, tr.message, statusStr, dbg, tr.translationId);
+                        }
+                        if (tr.status != VotProtoUtils.STATUS_WAITING && tr.status != VotProtoUtils.STATUS_LONG_WAITING) {
+                            // break to outer handling (failed, etc)
+                            break;
+                        }
+                        if (tr.remainingTime > 0) {
+                            sleepMs = Math.max(5000, Math.min(60000, tr.remainingTime * 1000 + 2000));
+                            if (tr.remainingTime <= 3) sleepMs = 1000;
+                        } else {
+                            sleepMs = 5000;
+                        }
+                        if (listener != null) listener.onProgress("waiting poll eta=" + tr.remainingTime);
+                        // adjust deadline if new eta larger?
+                        // continue polling
+                    }
+                    // if still waiting after deadline, return waiting result to let controller retry
+                    boolean translated = false;
+                    return new VotTranslateResult(translated, Math.max(tr.remainingTime, 0), tr.url, tr.message, statusStr, dbg + " waiting_timeout", tr.translationId);
+                }
+                if (tr.status == VotProtoUtils.STATUS_AUDIO_REQUESTED) {
+                    Log.e(TAG, "audio requested - need upload, fallback");
+                    // try fallback without lively voice
+                    if (useLively) {
+                        useLively = false;
+                        Log.e(TAG, "retry without livelyVoice");
+                        continue;
+                    }
+                    return new VotTranslateResult(false, Math.max(tr.remainingTime, 0), null, tr.message, statusStr, dbg, tr.translationId);
+                }
+                if (tr.status == VotProtoUtils.STATUS_SESSION_REQUIRED) {
+                    synchronized (this) { secretKey = null; }
+                    if (attempt < 2) {
+                        Log.e(TAG, "session required, retry with new session");
+                        ensureSession();
+                        continue;
+                    }
+                }
+                if (tr.status == VotProtoUtils.STATUS_FAILED && tr.shouldRetry > 0 && attempt < 2) {
+                    int sleepMs = Math.max(5000, Math.min(60000, tr.shouldRetry * 1000));
+                    Log.e(TAG, "server retry shouldRetry=" + tr.shouldRetry + " sleepMs=" + sleepMs);
+                    try { Thread.sleep(sleepMs); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
+                    continue;
+                }
+                boolean translated = tr.status == VotProtoUtils.STATUS_FINISHED && tr.url != null && !tr.url.isEmpty();
+                return new VotTranslateResult(translated, tr.remainingTime, tr.url, tr.message, statusStr, dbg, tr.translationId);
             }
-            Log.e(TAG, "translate resp len=" + resp.length);
-            VotProtoUtils.TranslationResponse tr = VotProtoUtils.decodeTranslationResponse(resp);
-            String statusStr = statusToString(tr.status);
-            boolean translated = tr.status == VotProtoUtils.STATUS_FINISHED && tr.url != null && !tr.url.isEmpty();
-            String dbg = "status=" + tr.status + " url=" + (tr.url != null ? tr.url.substring(0, Math.min(40, tr.url.length())) : "null");
-            if (tr.message != null && !tr.message.isEmpty()) dbg += " msg=" + tr.message;
-            Log.e(TAG, "translate result " + dbg + " translated=" + translated);
-            return new VotTranslateResult(translated, tr.remainingTime, tr.url, tr.message, statusStr, dbg, tr.translationId);
+            return new VotTranslateResult(false, 0, null, "No response", "FAILED", "No response", null);
         } catch (Exception e) {
             Log.e(TAG, "translate exception", e);
             return new VotTranslateResult(false, 0, null, e.getMessage(), "FAILED", e.getMessage(), null);
         }
+    }
+
+    private String buildDebug(VotProtoUtils.TranslationResponse tr, String prefix) {
+        StringBuilder sb = new StringBuilder();
+        if (prefix != null && !prefix.isEmpty()) { sb.append(prefix); sb.append(' '); }
+        sb.append(statusToString(tr.status));
+        if (tr.remainingTime >= 0) { sb.append(" eta="); sb.append(tr.remainingTime); sb.append('s'); }
+        if (tr.shouldRetry >= 0) { sb.append(" retry="); sb.append(tr.shouldRetry); sb.append('s'); }
+        if (tr.translationId != null && !tr.translationId.isEmpty()) { sb.append(" id="); sb.append(tr.translationId); }
+        if (tr.url != null && !tr.url.isEmpty()) sb.append(" url=ok");
+        if (tr.isLivelyVoice) sb.append(" lively=1");
+        if (tr.message != null && !tr.message.isEmpty()) { sb.append(" msg="); sb.append(tr.message); }
+        return sb.toString();
+    }
+
+    private static String sanitizeLanguage(String lang, String fallback) {
+        if (lang == null) return fallback;
+        String s = lang.trim().toLowerCase(java.util.Locale.US).replace('\u2010','-').replace('\u2011','-').replace('\u2012','-').replace('\u2013','-').replace('\u2014','-');
+        int idx = s.indexOf('(');
+        if (idx >= 0) s = s.substring(0, idx).trim();
+        int end = s.indexOf('-');
+        if (end < 0) end = s.indexOf('_');
+        if (end > 0) s = s.substring(0, end);
+        if (!s.matches("[a-z]{2,3}")) return fallback;
+        return s;
     }
 
     private String statusToString(int s) {
