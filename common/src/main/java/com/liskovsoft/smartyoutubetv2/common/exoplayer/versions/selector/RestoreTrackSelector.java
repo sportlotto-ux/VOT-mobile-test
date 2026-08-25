@@ -2,12 +2,12 @@ package com.liskovsoft.smartyoutubetv2.common.exoplayer.versions.selector;
 
 import android.util.Pair;
 import androidx.annotation.Nullable;
-import com.google.android.exoplayer2.ExoPlaybackException;
-import com.google.android.exoplayer2.RendererCapabilities;
-import com.google.android.exoplayer2.source.TrackGroupArray;
-import com.google.android.exoplayer2.trackselection.DefaultTrackSelector;
-import com.google.android.exoplayer2.trackselection.TrackSelection.Definition;
-import com.google.android.exoplayer2.trackselection.TrackSelection.Factory;
+import androidx.media3.exoplayer.ExoPlaybackException;
+import androidx.media3.exoplayer.RendererCapabilities;
+import androidx.media3.exoplayer.source.TrackGroupArray;
+import androidx.media3.exoplayer.trackselection.DefaultTrackSelector;
+import androidx.media3.exoplayer.trackselection.TrackSelection.Definition;
+import androidx.media3.exoplayer.trackselection.TrackSelection.Factory;
 import com.liskovsoft.sharedutils.mylogger.Log;
 import com.liskovsoft.smartyoutubetv2.common.exoplayer.selector.TrackSelectorManager;
 import com.liskovsoft.smartyoutubetv2.common.exoplayer.selector.track.MediaTrack;

@@ -1,6 +1,6 @@
 package com.liskovsoft.smartyoutubetv2.common.app.models.playback.listener;
 
-import com.google.android.exoplayer2.ExoPlaybackException;
+import androidx.media3.exoplayer.ExoPlaybackException;
 import com.liskovsoft.smartyoutubetv2.common.app.models.data.Video;
 import com.liskovsoft.smartyoutubetv2.common.exoplayer.selector.FormatItem;
 import com.liskovsoft.smartyoutubetv2.common.exoplayer.selector.TrackSelectorManager;

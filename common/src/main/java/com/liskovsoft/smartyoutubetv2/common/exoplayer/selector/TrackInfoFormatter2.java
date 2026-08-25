@@ -1,6 +1,6 @@
 package com.liskovsoft.smartyoutubetv2.common.exoplayer.selector;
 
-import com.google.android.exoplayer2.Format;
+import androidx.media3.common.Format;
 
 public class TrackInfoFormatter2 {
     private String mResolutionStr;

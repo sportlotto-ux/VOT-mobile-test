@@ -6,7 +6,7 @@ import android.view.Gravity;
 
 import androidx.annotation.Nullable;
 
-import com.google.android.exoplayer2.Format;
+import androidx.media3.common.Format;
 import com.liskovsoft.mediaserviceinterfaces.CommentsService;
 import com.liskovsoft.mediaserviceinterfaces.ContentService;
 import com.liskovsoft.mediaserviceinterfaces.MediaItemService;

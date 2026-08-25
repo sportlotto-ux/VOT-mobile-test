@@ -5,20 +5,20 @@ import android.os.Build.VERSION;
 
 import androidx.annotation.Nullable;
 
-import com.google.android.exoplayer2.SimpleExoPlayer;
-import com.google.android.exoplayer2.audio.AudioListener;
+import androidx.media3.exoplayer.ExoPlayer;
+import androidx.media3.exoplayer.audio.AudioListener;
 import com.liskovsoft.sharedutils.mylogger.Log;
 
 public class VolumeBooster implements AudioListener {
     private static final String TAG = VolumeBooster.class.getSimpleName();
     private boolean mIsEnabled;
     private final float mVolume;
-    private final SimpleExoPlayer mPlayer;
+    private final ExoPlayer mPlayer;
     private LoudnessEnhancer mBooster;
     private boolean mIsSupported;
     private int mCurrentSessionId = -1;
 
-    public VolumeBooster(boolean enabled, float volume, @Nullable SimpleExoPlayer player) {
+    public VolumeBooster(boolean enabled, float volume, @Nullable ExoPlayer player) {
         mIsEnabled = enabled;
         mVolume = volume;
         mPlayer = player;

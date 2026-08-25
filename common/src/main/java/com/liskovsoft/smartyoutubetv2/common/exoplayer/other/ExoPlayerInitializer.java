@@ -4,23 +4,23 @@ import android.content.Context;
 import android.os.Build;
 import android.os.Handler;
 import androidx.annotation.Nullable;
-import com.google.android.exoplayer2.C;
-import com.google.android.exoplayer2.DefaultLoadControl;
-import com.google.android.exoplayer2.DefaultRenderersFactory;
-import com.google.android.exoplayer2.ExoPlayerFactory;
-import com.google.android.exoplayer2.SeekParameters;
-import com.google.android.exoplayer2.SimpleExoPlayer;
-import com.google.android.exoplayer2.audio.AudioAttributes;
-import com.google.android.exoplayer2.drm.DefaultDrmSessionManager;
-import com.google.android.exoplayer2.drm.DrmSessionManager;
-import com.google.android.exoplayer2.drm.ExoMediaDrm.KeyRequest;
-import com.google.android.exoplayer2.drm.ExoMediaDrm.ProvisionRequest;
-import com.google.android.exoplayer2.drm.FrameworkMediaCrypto;
-import com.google.android.exoplayer2.drm.MediaDrmCallback;
-import com.google.android.exoplayer2.drm.UnsupportedDrmException;
-import com.google.android.exoplayer2.trackselection.DefaultTrackSelector;
-import com.google.android.exoplayer2.upstream.BandwidthMeter;
-import com.google.android.exoplayer2.upstream.TransferListener;
+import androidx.media3.common.C;
+import androidx.media3.exoplayer.DefaultLoadControl;
+import androidx.media3.exoplayer.DefaultRenderersFactory;
+import androidx.media3.exoplayer.ExoPlayerFactory;
+import androidx.media3.exoplayer.SeekParameters;
+import androidx.media3.exoplayer.ExoPlayer;
+import androidx.media3.exoplayer.audio.AudioAttributes;
+import androidx.media3.exoplayer.drm.DefaultDrmSessionManager;
+import androidx.media3.exoplayer.drm.DrmSessionManager;
+import androidx.media3.exoplayer.drm.ExoMediaDrm.KeyRequest;
+import androidx.media3.exoplayer.drm.ExoMediaDrm.ProvisionRequest;
+import androidx.media3.exoplayer.drm.FrameworkMediaCrypto;
+import androidx.media3.exoplayer.drm.MediaDrmCallback;
+import androidx.media3.exoplayer.drm.UnsupportedDrmException;
+import androidx.media3.exoplayer.trackselection.DefaultTrackSelector;
+import androidx.media3.exoplayer.upstream.BandwidthMeter;
+import androidx.media3.datasource.TransferListener;
 import com.liskovsoft.sharedutils.helpers.DeviceHelpers;
 import com.liskovsoft.smartyoutubetv2.common.prefs.PlayerData;
 import com.liskovsoft.smartyoutubetv2.common.prefs.PlayerTweaksData;
@@ -33,7 +33,7 @@ public class ExoPlayerInitializer {
     private final PlayerTweaksData mPlayerTweaksData;
     private VolumeBooster mVolumeBooster;
     private float mVolumeBoost;
-    private SimpleExoPlayer mPlayer;
+    private ExoPlayer mPlayer;
     private static AudioAttributes sAudioAttributes;
 
     public ExoPlayerInitializer(Context context) {
@@ -48,17 +48,20 @@ public class ExoPlayerInitializer {
         mMaxBufferBytes = deviceRam <= 0 ? 196_000_000 : (int)(deviceRam / 18);
     }
 
-    public SimpleExoPlayer createPlayer(Context context, DefaultRenderersFactory renderersFactory, DefaultTrackSelector trackSelector) {
+    public ExoPlayer createPlayer(Context context, DefaultRenderersFactory renderersFactory, DefaultTrackSelector trackSelector) {
         DefaultLoadControl loadControl = createLoadControl();
 
         // HDR fix?
         //trackSelector.setParameters(trackSelector.buildUponParameters().setTunnelingAudioSessionId(C.generateAudioSessionIdV21(context)));
 
         // Old initializer
-        SimpleExoPlayer player = ExoPlayerFactory.newSimpleInstance(context, renderersFactory, trackSelector, loadControl);
+        ExoPlayer player = new ExoPlayer.Builder(context, renderersFactory)
+                .setTrackSelector(trackSelector)
+                .setLoadControl(loadControl)
+                .build();
 
         // New initializer
-        //SimpleExoPlayer player = ExoPlayerFactory.newSimpleInstance(
+        //ExoPlayer player = ExoPlayerFactory.newSimpleInstance(
         //        context, renderersFactory, trackSelector, loadControl,
         //        null, new DummyBandwidthMeter(), new AnalyticsCollector.Factory(), Util.getLooper()
         //);
@@ -145,10 +148,10 @@ public class ExoPlayerInitializer {
         // Decrease buffer size?
         //baseBuilder.setAllocator(new DefaultAllocator(true, 16 * 1024));
 
-        return baseBuilder.createDefaultLoadControl();
+        return baseBuilder.build();
     }
 
-    private void setupVolumeBoost(SimpleExoPlayer player) {
+    private void setupVolumeBoost(ExoPlayer player) {
         // 5.1 audio cannot be boosted (format isn't supported error)
         // also, other 2.0 tracks in 5.1 group is already too loud. so cancel them too.
         float volume = mPlayerTweaksData.isPlayerAutoVolumeEnabled() ? mPlayerData.getPlayerVolume() * 2.0f : mPlayerData.getPlayerVolume();
@@ -162,7 +165,7 @@ public class ExoPlayerInitializer {
     /**
      * Manage audio focus. E.g. use Spotify when audio is disabled.
      */
-    private void setupAudioFocus(SimpleExoPlayer player) {
+    private void setupAudioFocus(ExoPlayer player) {
         if (player != null && mPlayerTweaksData.isAudioFocusEnabled()) {
             try {
                 player.setAudioAttributes(getAudioAttributes(), true);
@@ -172,7 +175,7 @@ public class ExoPlayerInitializer {
         }
     }
 
-    private void applyPlaybackFixes(SimpleExoPlayer player) {
+    private void applyPlaybackFixes(ExoPlayer player) {
         // Try to fix decoder error on Nvidia Shield 2019.
         // Init resources as early as possible.
         //player.setForegroundMode(true);

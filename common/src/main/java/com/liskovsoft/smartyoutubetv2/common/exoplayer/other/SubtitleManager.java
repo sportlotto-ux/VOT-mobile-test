@@ -11,10 +11,10 @@ import android.view.accessibility.CaptioningManager.CaptionStyle;
 
 import androidx.annotation.RequiresApi;
 import androidx.core.content.ContextCompat;
-import com.google.android.exoplayer2.text.CaptionStyleCompat;
-import com.google.android.exoplayer2.text.Cue;
-import com.google.android.exoplayer2.text.TextOutput;
-import com.google.android.exoplayer2.ui.SubtitleView;
+import androidx.media3.exoplayer.text.CaptionStyleCompat;
+import androidx.media3.exoplayer.text.Cue;
+import androidx.media3.exoplayer.text.TextOutput;
+import androidx.media3.exoplayer.ui.SubtitleView;
 import com.liskovsoft.sharedutils.helpers.Helpers;
 import com.liskovsoft.smartyoutubetv2.common.R;
 import com.liskovsoft.smartyoutubetv2.common.prefs.AppPrefs;

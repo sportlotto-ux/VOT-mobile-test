@@ -4,18 +4,17 @@ import android.content.Context;
 import android.os.Build;
 import android.os.Build.VERSION;
 
-import com.google.android.exoplayer2.C;
-import com.google.android.exoplayer2.ExoPlaybackException;
-import com.google.android.exoplayer2.Format;
-import com.google.android.exoplayer2.PlaybackParameters;
-import com.google.android.exoplayer2.Player;
-import com.google.android.exoplayer2.SimpleExoPlayer;
-import com.google.android.exoplayer2.source.MediaSource;
-import com.google.android.exoplayer2.source.MergingMediaSource;
-import com.google.android.exoplayer2.source.TrackGroupArray;
-import com.google.android.exoplayer2.trackselection.DefaultTrackSelector;
-import com.google.android.exoplayer2.trackselection.TrackSelection;
-import com.google.android.exoplayer2.trackselection.TrackSelectionArray;
+import androidx.media3.common.C;
+import androidx.media3.common.PlaybackException;
+import androidx.media3.common.Tracks;
+import androidx.media3.exoplayer.ExoPlaybackException;
+import androidx.media3.common.Format;
+import androidx.media3.exoplayer.PlaybackParameters;
+import androidx.media3.exoplayer.Player;
+import androidx.media3.exoplayer.ExoPlayer;
+import androidx.media3.exoplayer.source.MediaSource;
+import androidx.media3.exoplayer.source.MergingMediaSource;
+import androidx.media3.exoplayer.trackselection.DefaultTrackSelector;
 import com.liskovsoft.mediaserviceinterfaces.data.MediaItemFormatInfo;
 import com.liskovsoft.sharedutils.mylogger.Log;
 import com.liskovsoft.smartyoutubetv2.common.BuildConfig;
@@ -39,7 +38,7 @@ import java.io.InputStream;
 import java.lang.ref.WeakReference;
 import java.util.List;
 
-public class ExoPlayerController implements Player.EventListener {
+public class ExoPlayerController implements Player.Listener {
     private static final String TAG = ExoPlayerController.class.getSimpleName();
     private final Context mContext;
     private final ExoMediaSourceFactory mMediaSourceFactory;
@@ -49,12 +48,12 @@ public class ExoPlayerController implements Player.EventListener {
     private boolean mOnSourceChanged;
     private WeakReference<Video> mVideo;
     private final PlayerEventListener mEventListener;
-    private SimpleExoPlayer mPlayer;
+    private ExoPlayer mPlayer;
     private PlayerView mPlayerView;
     private VolumeBooster mVolumeBooster;
     private boolean mIsEnded;
     private Runnable mOnVideoLoaded;
-    private com.google.android.exoplayer2.SimpleExoPlayer mTranslationPlayer;
+    private androidx.media3.exoplayer.ExoPlayer mTranslationPlayer;
     private boolean mTranslationOverlayActive;
     private float mLastUserVolume = 1.0f;
 
@@ -122,35 +121,37 @@ public class ExoPlayerController implements Player.EventListener {
     // VOT translation overlay - based on VTube logic but using base APIs
     public void openSabrWithTranslationAudio(com.liskovsoft.mediaserviceinterfaces.data.MediaItemFormatInfo formatInfo, String translationUrl) {
         long pos = getPositionMs();
-        com.google.android.exoplayer2.source.MediaSource videoSource = mMediaSourceFactory.fromSabrFormatInfo(formatInfo);
-        com.google.android.exoplayer2.source.MediaSource audioSource = mMediaSourceFactory.fromUrlList(java.util.Collections.singletonList(translationUrl));
+        androidx.media3.exoplayer.source.MediaSource videoSource = mMediaSourceFactory.fromSabrFormatInfo(formatInfo);
+        androidx.media3.exoplayer.source.MediaSource audioSource = mMediaSourceFactory.fromUrlList(java.util.Collections.singletonList(translationUrl));
         openMediaSourceWithTranslation(videoSource, audioSource, pos);
     }
     public void openDashWithTranslationAudio(com.liskovsoft.mediaserviceinterfaces.data.MediaItemFormatInfo formatInfo, String translationUrl) {
         long pos = getPositionMs();
-        com.google.android.exoplayer2.source.MediaSource videoSource = mMediaSourceFactory.fromDashFormatInfo(formatInfo);
-        com.google.android.exoplayer2.source.MediaSource audioSource = mMediaSourceFactory.fromUrlList(java.util.Collections.singletonList(translationUrl));
+        androidx.media3.exoplayer.source.MediaSource videoSource = mMediaSourceFactory.fromDashFormatInfo(formatInfo);
+        androidx.media3.exoplayer.source.MediaSource audioSource = mMediaSourceFactory.fromUrlList(java.util.Collections.singletonList(translationUrl));
         openMediaSourceWithTranslation(videoSource, audioSource, pos);
     }
     public void attachTranslationAudio(String url) {
         long pos = getPositionMs();
-        com.google.android.exoplayer2.source.MediaSource audioSource = mMediaSourceFactory.fromUrlList(java.util.Collections.singletonList(url));
+        androidx.media3.exoplayer.source.MediaSource audioSource = mMediaSourceFactory.fromUrlList(java.util.Collections.singletonList(url));
         attachTranslationAudioOverlay(audioSource, pos);
     }
     public void clearTranslationAudio() {
         releaseTranslationAudioPlayer();
     }
-    private void openMediaSourceWithTranslation(com.google.android.exoplayer2.source.MediaSource videoSource, com.google.android.exoplayer2.source.MediaSource audioSource, long pos) {
+    private void openMediaSourceWithTranslation(androidx.media3.exoplayer.source.MediaSource videoSource, androidx.media3.exoplayer.source.MediaSource audioSource, long pos) {
         // For minimal, use second player overlay instead of MergingMediaSource to avoid rebuffer
         openMediaSource(videoSource);
         if (pos >= 0) setPositionMs(pos);
         attachTranslationAudioOverlay(audioSource, pos);
     }
-    private void attachTranslationAudioOverlay(com.google.android.exoplayer2.source.MediaSource audioSource, long pos) {
+    private void attachTranslationAudioOverlay(androidx.media3.exoplayer.source.MediaSource audioSource, long pos) {
         releaseTranslationAudioPlayer();
         if (audioSource == null || mPlayer == null) return;
         try {
-            mTranslationPlayer = com.google.android.exoplayer2.ExoPlayerFactory.newSimpleInstance(mContext, new com.google.android.exoplayer2.DefaultRenderersFactory(mContext), new com.google.android.exoplayer2.trackselection.DefaultTrackSelector());
+            mTranslationPlayer = new androidx.media3.exoplayer.ExoPlayer.Builder(mContext, new androidx.media3.exoplayer.DefaultRenderersFactory(mContext))
+                    .setTrackSelector(new androidx.media3.exoplayer.trackselection.DefaultTrackSelector(mContext))
+                    .build();
             mTranslationOverlayActive = true;
             mLastUserVolume = mPlayer.getVolume();
             // duck original
@@ -169,7 +170,7 @@ public class ExoPlayerController implements Player.EventListener {
     }
     private void releaseTranslationAudioPlayer() {
         if (mTranslationPlayer != null) {
-            try { mTranslationPlayer.stop(true); mTranslationPlayer.release(); } catch (Exception e) {}
+            try { mTranslationPlayer.stop(); mTranslationPlayer.release(); } catch (Exception e) {}
             mTranslationPlayer = null;
         }
         mTranslationOverlayActive = false;
@@ -269,7 +270,7 @@ public class ExoPlayerController implements Player.EventListener {
         //mEventListener = null;
     }
     
-    public void setPlayer(SimpleExoPlayer player) {
+    public void setPlayer(ExoPlayer player) {
         mPlayer = player;
         player.addListener(this);
     }
@@ -341,35 +342,30 @@ public class ExoPlayerController implements Player.EventListener {
     }
 
     @Override
-    public void onTracksChanged(TrackGroupArray trackGroups, TrackSelectionArray trackSelections) {
-        Log.d(TAG, "onTracksChanged: start: groups length: " + trackGroups.length);
+    public void onTracksChanged(Tracks tracks) {
+        Log.d(TAG, "onTracksChanged: start: groups length: " + tracks.getGroups().size());
 
-        if (trackGroups.length == 0) {
+        if (tracks.getGroups().isEmpty()) {
             Log.i(TAG, "onTracksChanged: Hmm. Strange. Received empty groups, no selections. Why is this happens only on next/prev videos?");
             return;
         }
 
         notifyOnVideoLoad();
 
-        for (TrackSelection selection : trackSelections.getAll()) {
-            if (selection != null) {
-                // EXO: 2.12.1
-                //Format format = selection.getSelectedFormat();
+        for (Tracks.Group group : tracks.getGroups()) {
+            int length = group.length;
+            for (int i = 0; i < length; i++) {
+                if (group.isTrackSelected(i)) {
+                    Format format = group.getTrackFormat(i);
 
-                // EXO: 2.13.1
-                Format format = selection.getFormat(0);
+                    mEventListener.onTrackChanged(ExoFormatItem.from(format));
 
-                mEventListener.onTrackChanged(ExoFormatItem.from(format));
-
-                mTrackFormatter.setFormat(format);
+                    mTrackFormatter.setFormat(format);
+                }
             }
         }
-        
-        setQualityInfo(mTrackFormatter.getQualityLabel());
 
-        // Manage audio focus. E.g. use Spotify when audio is disabled. (NOT NEEDED!!!)
-        //MediaTrack audioTrack = mTrackSelectorManager.getAudioTrack();
-        //ExoPlayerInitializer.enableAudioFocus(mPlayer, audioTrack != null && !audioTrack.isEmpty());
+        setQualityInfo(mTrackFormatter.getQualityLabel());
     }
 
     private void notifyOnVideoLoad() {
@@ -389,14 +385,19 @@ public class ExoPlayerController implements Player.EventListener {
     }
 
     @Override
-    public void onPlayerError(ExoPlaybackException error) {
+    public void onPlayerError(PlaybackException error) {
         Log.e(TAG, "onPlayerError: " + error);
 
         // NOTE: Player is released at this point. So, there is no sense to restore the playback here.
 
+        ExoPlaybackException exoError = error instanceof ExoPlaybackException ? (ExoPlaybackException) error : null;
+
         Throwable nested = error.getCause() != null ? error.getCause() : error;
 
-        mEventListener.onEngineError(error.type, error.rendererIndex, nested);
+        mEventListener.onEngineError(
+                exoError != null ? exoError.type : PlaybackException.ERROR_CODE_UNSPECIFIED,
+                exoError != null ? exoError.rendererIndex : -1,
+                nested);
     }
 
     @Override
@@ -432,7 +433,7 @@ public class ExoPlayerController implements Player.EventListener {
     }
 
     @Override
-    public void onPositionDiscontinuity(int reason) {
+    public void onPositionDiscontinuity(Player.PositionInfo oldPosition, Player.PositionInfo newPosition, int reason) {
         Log.e(TAG, "onPositionDiscontinuity");
 
         // Fix video loop on 480p with legacy codes enabled
@@ -506,7 +507,7 @@ public class ExoPlayerController implements Player.EventListener {
      */
     public void resetPlayerState() {
         if (containsMedia()) {
-            mPlayer.stop(true);
+            mPlayer.stop();
         }
     }
     
@@ -559,7 +560,7 @@ public class ExoPlayerController implements Player.EventListener {
 
         try {
             mPlayer.removeListener(this);
-            mPlayer.stop(true); // Cause input lags due to high cpu load?
+            mPlayer.stop(); // Cause input lags due to high cpu load?
             mPlayer.clearVideoSurface();
             mPlayer.release();
         } catch (ArrayIndexOutOfBoundsException e) { // thrown on stop()

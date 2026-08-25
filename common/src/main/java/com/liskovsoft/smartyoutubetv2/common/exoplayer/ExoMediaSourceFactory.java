@@ -5,38 +5,37 @@ import android.content.Context;
 import android.net.Uri;
 import android.text.TextUtils;
 import androidx.annotation.NonNull;
-import com.google.android.exoplayer2.C;
-import com.google.android.exoplayer2.ext.cronet.CronetDataSourceFactory;
-import com.google.android.exoplayer2.ext.cronet.CronetEngineWrapper;
-import com.google.android.exoplayer2.ext.okhttp.OkHttpDataSourceFactory;
-import com.google.android.exoplayer2.extractor.DefaultExtractorsFactory;
-import com.google.android.exoplayer2.source.ExtractorMediaSource;
-import com.google.android.exoplayer2.source.MediaSource;
-import com.google.android.exoplayer2.source.dash.DashChunkSource;
-import com.google.android.exoplayer2.source.dash.DashMediaSource;
-import com.google.android.exoplayer2.source.dash.DefaultDashChunkSource;
-import com.google.android.exoplayer2.source.dash.manifest.DashManifest;
-import com.google.android.exoplayer2.source.dash.manifest.DashManifestParser;
-import com.google.android.exoplayer2.source.dash.manifest.DashManifestParser2;
-import com.google.android.exoplayer2.source.dash.manifest.Period;
-import com.google.android.exoplayer2.source.dash.manifest.ProgramInformation;
-import com.google.android.exoplayer2.source.dash.manifest.UtcTimingElement;
-import com.google.android.exoplayer2.source.hls.HlsMediaSource;
-import com.google.android.exoplayer2.source.sabr.DefaultSabrChunkSource;
-import com.google.android.exoplayer2.source.sabr.SabrChunkSource;
-import com.google.android.exoplayer2.source.sabr.SabrMediaSource;
-import com.google.android.exoplayer2.source.sabr.manifest.SabrManifest;
-import com.google.android.exoplayer2.source.sabr.manifest.SabrManifestParser;
-import com.google.android.exoplayer2.source.smoothstreaming.DefaultSsChunkSource;
-import com.google.android.exoplayer2.source.smoothstreaming.SsMediaSource;
-import com.google.android.exoplayer2.upstream.DataSource;
-import com.google.android.exoplayer2.upstream.DataSource.Factory;
-import com.google.android.exoplayer2.upstream.DefaultBandwidthMeter;
-import com.google.android.exoplayer2.upstream.DefaultDataSourceFactory;
-import com.google.android.exoplayer2.upstream.DefaultHttpDataSourceFactory;
-import com.google.android.exoplayer2.upstream.HttpDataSource;
-import com.google.android.exoplayer2.upstream.HttpDataSource.BaseFactory;
-import com.google.android.exoplayer2.util.Util;
+import androidx.media3.common.C;
+import androidx.media3.datasource.DataSource;
+import androidx.media3.datasource.DefaultDataSource;
+import androidx.media3.datasource.DefaultHttpDataSource;
+import androidx.media3.datasource.HttpDataSource;
+import androidx.media3.datasource.cronet.CronetDataSource;
+import androidx.media3.datasource.cronet.CronetEngineWrapper;
+import androidx.media3.datasource.okhttp.OkHttpDataSource;
+import androidx.media3.extractor.DefaultExtractorsFactory;
+import androidx.media3.exoplayer.ExoPlayer;
+import androidx.media3.exoplayer.source.ProgressiveMediaSource;
+import androidx.media3.exoplayer.source.MediaSource;
+import androidx.media3.exoplayer.source.dash.DashChunkSource;
+import androidx.media3.exoplayer.source.dash.DashMediaSource;
+import androidx.media3.exoplayer.source.dash.DefaultDashChunkSource;
+import androidx.media3.exoplayer.source.dash.manifest.DashManifest;
+import androidx.media3.exoplayer.source.dash.manifest.DashManifestParser;
+import androidx.media3.exoplayer.source.dash.manifest.Period;
+import androidx.media3.exoplayer.source.dash.manifest.ProgramInformation;
+import androidx.media3.exoplayer.source.dash.manifest.UtcTimingElement;
+import androidx.media3.exoplayer.source.hls.HlsMediaSource;
+import androidx.media3.exoplayer.source.sabr.DefaultSabrChunkSource;
+import androidx.media3.exoplayer.source.sabr.SabrChunkSource;
+import androidx.media3.exoplayer.source.sabr.SabrMediaSource;
+import androidx.media3.exoplayer.source.sabr.manifest.SabrManifest;
+import androidx.media3.exoplayer.source.sabr.manifest.SabrManifestParser;
+import androidx.media3.exoplayer.source.smoothstreaming.DefaultSsChunkSource;
+import androidx.media3.exoplayer.source.smoothstreaming.SsMediaSource;
+import androidx.media3.exoplayer.upstream.BandwidthMeter;
+import androidx.media3.exoplayer.upstream.DefaultBandwidthMeter;
+import androidx.media3.common.util.Util;
 import com.liskovsoft.mediaserviceinterfaces.data.MediaItemFormatInfo;
 import com.liskovsoft.sharedutils.cronet.CronetManager;
 import com.liskovsoft.sharedutils.helpers.FileHelpers;
@@ -68,7 +67,7 @@ public class ExoMediaSourceFactory {
     private static final String HLS_PLAYLIST_EXTENSION = "m3u8";
     private static final boolean USE_BANDWIDTH_METER = false;
     private TrackErrorFixer mTrackErrorFixer;
-    private Factory mMediaDataSourceFactory;
+    private DataSource.Factory mMediaDataSourceFactory;
 
     public ExoMediaSourceFactory(Context context) {
         mContext = context;
@@ -113,8 +112,9 @@ public class ExoMediaSourceFactory {
      * @return A new DataSource factory.
      */
     private DataSource.Factory buildDataSourceFactory(boolean useBandwidthMeter) {
-        DefaultBandwidthMeter bandwidthMeter = useBandwidthMeter ? BANDWIDTH_METER : null;
-        return new DefaultDataSourceFactory(mContext, bandwidthMeter, buildHttpDataSourceFactory(useBandwidthMeter));
+        BandwidthMeter bandwidthMeter = useBandwidthMeter ? BANDWIDTH_METER : null;
+        return new DefaultDataSource.Factory(mContext, buildHttpDataSourceFactory(useBandwidthMeter))
+                .setTransferListener(bandwidthMeter);
     }
 
     /**
@@ -127,7 +127,7 @@ public class ExoMediaSourceFactory {
     private HttpDataSource.Factory buildHttpDataSourceFactory(boolean useBandwidthMeter) {
         PlayerTweaksData tweaksData = PlayerTweaksData.instance(mContext);
         int source = tweaksData.getPlayerDataSource();
-        DefaultBandwidthMeter bandwidthMeter = useBandwidthMeter ? BANDWIDTH_METER : null;
+        BandwidthMeter bandwidthMeter = useBandwidthMeter ? BANDWIDTH_METER : null;
         return source == PlayerTweaksData.PLAYER_DATA_SOURCE_OKHTTP ? buildOkHttpDataSourceFactory(bandwidthMeter) :
                         source == PlayerTweaksData.PLAYER_DATA_SOURCE_CRONET && CronetManager.getEngine(mContext) != null ? buildCronetDataSourceFactory(bandwidthMeter) :
                                 buildDefaultHttpDataSourceFactory(bandwidthMeter);
@@ -168,7 +168,7 @@ public class ExoMediaSourceFactory {
                 }
                 return hlsSource;
             case C.TYPE_OTHER:
-                ExtractorMediaSource extractorSource = new ExtractorMediaSource.Factory(getMediaDataSourceFactory())
+                ProgressiveMediaSource extractorSource = new ProgressiveMediaSource.Factory(getMediaDataSourceFactory())
                         .setExtractorsFactory(new DefaultExtractorsFactory())
                         .createMediaSource(uri);
                 if (mTrackErrorFixer != null) {
@@ -276,24 +276,24 @@ public class ExoMediaSourceFactory {
     /**
      * Use OkHttp for networking
      */
-    private HttpDataSource.Factory buildOkHttpDataSourceFactory(DefaultBandwidthMeter bandwidthMeter) {
-        OkHttpDataSourceFactory dataSourceFactory = new OkHttpDataSourceFactory(OkHttpManager.instance().getClient(), USER_AGENT,
-                bandwidthMeter);
+    private HttpDataSource.Factory buildOkHttpDataSourceFactory(BandwidthMeter bandwidthMeter) {
+        OkHttpDataSource.Factory dataSourceFactory = new OkHttpDataSource.Factory(OkHttpManager.instance().getClient())
+                .setUserAgent(USER_AGENT)
+                .setTransferListener(bandwidthMeter);
         addCommonHeaders(dataSourceFactory);
         return dataSourceFactory;
     }
 
-    private HttpDataSource.Factory buildCronetDataSourceFactory(DefaultBandwidthMeter bandwidthMeter) {
-        CronetDataSourceFactory dataSourceFactory =
-                new CronetDataSourceFactory(
+    private HttpDataSource.Factory buildCronetDataSourceFactory(BandwidthMeter bandwidthMeter) {
+        CronetDataSource.Factory dataSourceFactory =
+                new CronetDataSource.Factory(
                         new CronetEngineWrapper(CronetManager.getEngine(mContext)),
-                        Executors.newSingleThreadExecutor(),
-                        null,
-                        bandwidthMeter,
-                        (int) OkHttpManager.getConnectTimeoutMs(),
-                        (int) OkHttpManager.getReadTimeoutMs(),
-                        true,
-                        USER_AGENT);
+                        Executors.newSingleThreadExecutor())
+                        .setTransferListener(bandwidthMeter)
+                        .setConnectTimeoutMs((int) OkHttpManager.getConnectTimeoutMs())
+                        .setReadTimeoutMs((int) OkHttpManager.getReadTimeoutMs())
+                        .setHandleSetCookieRequests(true)
+                        .setUserAgent(USER_AGENT);
         addCommonHeaders(dataSourceFactory);
         return dataSourceFactory;
     }
@@ -301,10 +301,13 @@ public class ExoMediaSourceFactory {
     /**
      * Use built-in component for networking
      */
-    private HttpDataSource.Factory buildDefaultHttpDataSourceFactory(DefaultBandwidthMeter bandwidthMeter) {
-        DefaultHttpDataSourceFactory dataSourceFactory = new DefaultHttpDataSourceFactory(
-                USER_AGENT, bandwidthMeter, (int) OkHttpManager.getConnectTimeoutMs(),
-                (int) OkHttpManager.getReadTimeoutMs(), true); // allowCrossProtocolRedirects = true
+    private HttpDataSource.Factory buildDefaultHttpDataSourceFactory(BandwidthMeter bandwidthMeter) {
+        DefaultHttpDataSource.Factory dataSourceFactory = new DefaultHttpDataSource.Factory()
+                .setUserAgent(USER_AGENT)
+                .setTransferListener(bandwidthMeter)
+                .setConnectTimeoutMs((int) OkHttpManager.getConnectTimeoutMs())
+                .setReadTimeoutMs((int) OkHttpManager.getReadTimeoutMs())
+                .setAllowCrossProtocolRedirects(true); // allowCrossProtocolRedirects = true
 
         addCommonHeaders(dataSourceFactory); // cause troubles for some users
         return dataSourceFactory;

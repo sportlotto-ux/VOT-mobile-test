@@ -5,12 +5,12 @@ import android.util.AttributeSet;
 
 import androidx.annotation.Nullable;
 
-import com.google.android.exoplayer2.DefaultRenderersFactory;
-import com.google.android.exoplayer2.SimpleExoPlayer;
-import com.google.android.exoplayer2.trackselection.AdaptiveTrackSelection;
-import com.google.android.exoplayer2.trackselection.DefaultTrackSelector;
-import com.google.android.exoplayer2.ui.AspectRatioFrameLayout;
-import com.google.android.exoplayer2.ui.PlayerView;
+import androidx.media3.exoplayer.DefaultRenderersFactory;
+import androidx.media3.exoplayer.ExoPlayer;
+import androidx.media3.exoplayer.trackselection.AdaptiveTrackSelection;
+import androidx.media3.exoplayer.trackselection.DefaultTrackSelector;
+import androidx.media3.exoplayer.ui.AspectRatioFrameLayout;
+import androidx.media3.exoplayer.ui.PlayerView;
 import com.liskovsoft.mediaserviceinterfaces.data.MediaItemFormatInfo;
 import com.liskovsoft.smartyoutubetv2.common.app.models.data.Video;
 import com.liskovsoft.smartyoutubetv2.common.app.models.data.VideoGroup;
@@ -37,7 +37,7 @@ public class EmbedPlayerView extends PlayerView implements PlaybackView {
     private static final String TAG = EmbedPlayerView.class.getSimpleName();
     public static final int QUALITY_LOW = 0;
     public static final int QUALITY_NORMAL = 1;
-    private SimpleExoPlayer mPlayer;
+    private ExoPlayer mPlayer;
     private ExoPlayerInitializer mPlayerInitializer;
     private ExoPlayerController mExoPlayerController;
     private PlaybackPresenter mPlaybackPresenter;

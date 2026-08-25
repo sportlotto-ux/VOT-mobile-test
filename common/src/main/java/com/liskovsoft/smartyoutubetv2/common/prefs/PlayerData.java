@@ -7,7 +7,7 @@ import android.os.Build.VERSION;
 
 import androidx.annotation.NonNull;
 
-import com.google.android.exoplayer2.text.CaptionStyleCompat;
+import androidx.media3.exoplayer.text.CaptionStyleCompat;
 import com.liskovsoft.sharedutils.helpers.DeviceHelpers;
 import com.liskovsoft.sharedutils.helpers.Helpers;
 import com.liskovsoft.sharedutils.locale.LocaleUtility;
