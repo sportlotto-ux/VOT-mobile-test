@@ -80,33 +80,68 @@ public class ExoPlayerController implements Player.EventListener {
     }
 
     public void openSabr(MediaItemFormatInfo formatInfo) {
-        MediaSource mediaSource = mMediaSourceFactory.fromSabrFormatInfo(formatInfo);
-        openMediaSource(mediaSource);
+        openWithVot(() -> mMediaSourceFactory.fromSabrFormatInfo(formatInfo));
     }
 
     public void openDash(MediaItemFormatInfo formatInfo) {
-        MediaSource mediaSource = mMediaSourceFactory.fromDashFormatInfo(formatInfo);
-        openMediaSource(mediaSource);
+        openWithVot(() -> mMediaSourceFactory.fromDashFormatInfo(formatInfo));
     }
 
     public void openDash(InputStream dashManifest) {
-        MediaSource mediaSource = mMediaSourceFactory.fromDashManifest(dashManifest);
-        openMediaSource(mediaSource);
+        openWithVot(() -> mMediaSourceFactory.fromDashManifest(dashManifest));
     }
 
     public void openDashUrl(String dashManifestUrl) {
-        MediaSource mediaSource = mMediaSourceFactory.fromDashManifestUrl(dashManifestUrl);
-        openMediaSource(mediaSource);
+        openWithVot(() -> mMediaSourceFactory.fromDashManifestUrl(dashManifestUrl));
     }
 
     public void openHlsUrl(String hlsPlaylistUrl) {
-        MediaSource mediaSource = mMediaSourceFactory.fromHlsPlaylist(hlsPlaylistUrl);
-        openMediaSource(mediaSource);
+        openWithVot(() -> mMediaSourceFactory.fromHlsPlaylist(hlsPlaylistUrl));
     }
 
     public void openUrlList(List<String> urlList) {
         MediaSource mediaSource = mMediaSourceFactory.fromUrlList(urlList);
         openMediaSource(mediaSource);
+    }
+
+    private interface SourceSupplier { MediaSource create(); }
+
+    private void openWithVot(SourceSupplier supplier) {
+        Video video = getVideo();
+        final String videoId = video != null ? video.videoId : null;
+        if (videoId == null || video.isLive) { // no translation for live/no-id
+            openMediaSource(supplier.create());
+            return;
+        }
+        Log.e(TAG, "VOT: requesting translation for " + videoId);
+        new Thread(() -> {
+            String votUrl = null;
+            try {
+                votUrl = com.liskovsoft.smartyoutubetv2.common.vot.VotClient.INSTANCE.getVotAudioUrlBlocking(videoId, 0, "en", "ru");
+            } catch (Exception e) {
+                Log.e(TAG, "VOT fetch failed", e);
+            }
+            final String fUrl = votUrl;
+            Log.e(TAG, fUrl != null ? "VOT: got audio url" : "VOT: no audio url, playing original");
+            Runnable apply = () -> {
+                try {
+                    MediaSource videoSource = supplier.create();
+                    MediaSource merged;
+                    if (fUrl != null) {
+                        MediaSource votSource = mMediaSourceFactory.fromUrlList(java.util.Collections.singletonList(fUrl));
+                        merged = new MergingMediaSource(videoSource, votSource);
+                        Log.e(TAG, "VOT merged into playback");
+                    } else {
+                        merged = videoSource;
+                    }
+                    openMediaSource(merged);
+                } catch (Exception e) {
+                    Log.e(TAG, "VOT merge failed", e);
+                    openMediaSource(supplier.create());
+                }
+            };
+            new android.os.Handler(android.os.Looper.getMainLooper()).post(apply);
+        }).start();
     }
 
     public void openMerged(MediaItemFormatInfo formatInfo, String hlsPlaylistUrl) {
@@ -180,10 +215,6 @@ public class ExoPlayerController implements Player.EventListener {
     
     public boolean isLoading() {
         return ExoUtils.isLoading(mPlayer);
-    }
-
-    public boolean isBuffering() {
-        return ExoUtils.isBuffering(mPlayer);
     }
     
     public boolean containsMedia() {
