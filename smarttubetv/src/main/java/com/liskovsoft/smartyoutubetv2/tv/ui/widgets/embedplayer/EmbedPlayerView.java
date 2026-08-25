@@ -9,8 +9,8 @@ import androidx.media3.exoplayer.DefaultRenderersFactory;
 import androidx.media3.exoplayer.ExoPlayer;
 import androidx.media3.exoplayer.trackselection.AdaptiveTrackSelection;
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector;
-import androidx.media3.exoplayer.ui.AspectRatioFrameLayout;
-import androidx.media3.exoplayer.ui.PlayerView;
+import androidx.media3.ui.AspectRatioFrameLayout;
+import androidx.media3.ui.PlayerView;
 import com.liskovsoft.mediaserviceinterfaces.data.MediaItemFormatInfo;
 import com.liskovsoft.smartyoutubetv2.common.app.models.data.Video;
 import com.liskovsoft.smartyoutubetv2.common.app.models.data.VideoGroup;
@@ -24,7 +24,7 @@ import com.liskovsoft.smartyoutubetv2.common.exoplayer.controller.ExoPlayerContr
 import com.liskovsoft.smartyoutubetv2.common.exoplayer.other.ExoPlayerInitializer;
 import com.liskovsoft.smartyoutubetv2.common.exoplayer.selector.FormatItem;
 import com.liskovsoft.smartyoutubetv2.common.exoplayer.versions.renderer.CustomOverridesRenderersFactory;
-import com.liskovsoft.smartyoutubetv2.common.exoplayer.versions.selector.RestoreTrackSelector;
+import androidx.media3.exoplayer.trackselection.RestoreTrackSelector;
 import com.liskovsoft.smartyoutubetv2.common.utils.Utils;
 
 import java.io.InputStream;

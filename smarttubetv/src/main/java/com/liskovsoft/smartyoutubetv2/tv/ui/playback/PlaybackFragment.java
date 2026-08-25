@@ -58,7 +58,7 @@ import com.liskovsoft.smartyoutubetv2.common.exoplayer.other.ExoPlayerInitialize
 import com.liskovsoft.smartyoutubetv2.common.exoplayer.other.SubtitleManager;
 import com.liskovsoft.smartyoutubetv2.common.exoplayer.selector.FormatItem;
 import com.liskovsoft.smartyoutubetv2.common.exoplayer.versions.renderer.CustomOverridesRenderersFactory;
-import com.liskovsoft.smartyoutubetv2.common.exoplayer.versions.selector.RestoreTrackSelector;
+import androidx.media3.exoplayer.trackselection.RestoreTrackSelector;
 import com.liskovsoft.smartyoutubetv2.common.prefs.MainUIData;
 import com.liskovsoft.smartyoutubetv2.common.prefs.PlayerData;
 import com.liskovsoft.smartyoutubetv2.common.prefs.PlayerTweaksData;

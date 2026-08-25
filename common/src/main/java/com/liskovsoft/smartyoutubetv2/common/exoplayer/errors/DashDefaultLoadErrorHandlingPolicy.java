@@ -3,7 +3,7 @@ package com.liskovsoft.smartyoutubetv2.common.exoplayer.errors;
 import androidx.media3.common.C;
 import androidx.media3.exoplayer.ParserException;
 import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy;
-import androidx.media3.exoplayer.upstream.HttpDataSource.InvalidResponseCodeException;
+import androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException;
 import androidx.media3.exoplayer.upstream.Loader.UnexpectedLoaderException;
 
 import java.io.FileNotFoundException;

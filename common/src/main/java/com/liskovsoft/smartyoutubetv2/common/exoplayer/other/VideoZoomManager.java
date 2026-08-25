@@ -1,7 +1,7 @@
 package com.liskovsoft.smartyoutubetv2.common.exoplayer.other;
 
-import androidx.media3.exoplayer.ui.AspectRatioFrameLayout;
-import androidx.media3.exoplayer.ui.PlayerView;
+import androidx.media3.ui.AspectRatioFrameLayout;
+import androidx.media3.ui.PlayerView;
 
 /**
  * <a href="Zoom to fit video: https://stackoverflow.com/questions/33608746/in-android-using-exoplayer-how-to-fill-surfaceview-with-a-video-that-does-not">More info</a>

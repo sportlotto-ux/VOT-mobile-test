@@ -17,22 +17,17 @@ import androidx.media3.extractor.DefaultExtractorsFactory;
 import androidx.media3.exoplayer.ExoPlayer;
 import androidx.media3.exoplayer.source.ProgressiveMediaSource;
 import androidx.media3.exoplayer.source.MediaSource;
-import androidx.media3.exoplayer.source.dash.DashChunkSource;
-import androidx.media3.exoplayer.source.dash.DashMediaSource;
-import androidx.media3.exoplayer.source.dash.DefaultDashChunkSource;
-import androidx.media3.exoplayer.source.dash.manifest.DashManifest;
-import androidx.media3.exoplayer.source.dash.manifest.DashManifestParser;
-import androidx.media3.exoplayer.source.dash.manifest.Period;
-import androidx.media3.exoplayer.source.dash.manifest.ProgramInformation;
-import androidx.media3.exoplayer.source.dash.manifest.UtcTimingElement;
-import androidx.media3.exoplayer.source.hls.HlsMediaSource;
-import androidx.media3.exoplayer.source.sabr.DefaultSabrChunkSource;
-import androidx.media3.exoplayer.source.sabr.SabrChunkSource;
-import androidx.media3.exoplayer.source.sabr.SabrMediaSource;
-import androidx.media3.exoplayer.source.sabr.manifest.SabrManifest;
-import androidx.media3.exoplayer.source.sabr.manifest.SabrManifestParser;
-import androidx.media3.exoplayer.source.smoothstreaming.DefaultSsChunkSource;
-import androidx.media3.exoplayer.source.smoothstreaming.SsMediaSource;
+import androidx.media3.exoplayer.dash.DashChunkSource;
+import androidx.media3.exoplayer.dash.DashMediaSource;
+import androidx.media3.exoplayer.dash.DefaultDashChunkSource;
+import androidx.media3.exoplayer.dash.manifest.DashManifest;
+import androidx.media3.exoplayer.dash.manifest.DashManifestParser;
+import androidx.media3.exoplayer.dash.manifest.Period;
+import androidx.media3.exoplayer.dash.manifest.ProgramInformation;
+import androidx.media3.exoplayer.dash.manifest.UtcTimingElement;
+import androidx.media3.exoplayer.hls.HlsMediaSource;
+import androidx.media3.exoplayer.smoothstreaming.DefaultSsChunkSource;
+import androidx.media3.exoplayer.smoothstreaming.SsMediaSource;
 import androidx.media3.exoplayer.upstream.BandwidthMeter;
 import androidx.media3.exoplayer.upstream.DefaultBandwidthMeter;
 import androidx.media3.common.util.Util;
@@ -42,7 +37,6 @@ import com.liskovsoft.sharedutils.helpers.FileHelpers;
 import com.liskovsoft.sharedutils.mylogger.Log;
 import com.liskovsoft.sharedutils.okhttp.OkHttpManager;
 import com.liskovsoft.smartyoutubetv2.common.exoplayer.errors.DashDefaultLoadErrorHandlingPolicy;
-import com.liskovsoft.smartyoutubetv2.common.exoplayer.errors.SabrDefaultLoadErrorHandlingPolicy;
 import com.liskovsoft.smartyoutubetv2.common.exoplayer.errors.TrackErrorFixer;
 import com.liskovsoft.smartyoutubetv2.common.prefs.PlayerTweaksData;
 import com.liskovsoft.smartyoutubetv2.common.utils.Utils;
@@ -182,17 +176,9 @@ public class ExoMediaSourceFactory {
     }
 
     private MediaSource buildSabrMediaSource(MediaItemFormatInfo formatInfo) {
-        // Are you using FrameworkSampleSource or ExtractorSampleSource when you build your player?
-        SabrMediaSource sabrSource = new SabrMediaSource.Factory(
-                getSabrChunkSourceFactory(),
-                null
-        )
-                .setLoadErrorHandlingPolicy(new SabrDefaultLoadErrorHandlingPolicy())
-                .createMediaSource(getSabrManifest(formatInfo));
-        if (mTrackErrorFixer != null) {
-            sabrSource.addEventListener(Utils.sHandler, mTrackErrorFixer);
-        }
-        return sabrSource;
+        // TODO(media3): rewire SABR to the app.votube.sabr module (media3 SabrMediaSource)
+        Log.e(TAG, "buildSabrMediaSource: SABR is not yet available on media3, falling back to DASH");
+        return buildDashMediaSource(formatInfo);
     }
 
     private MediaSource buildDashMediaSource(MediaItemFormatInfo formatInfo) {
@@ -239,11 +225,6 @@ public class ExoMediaSourceFactory {
             dashSource.addEventListener(Utils.sHandler, mTrackErrorFixer);
         }
         return dashSource;
-    }
-
-    private SabrManifest getSabrManifest(MediaItemFormatInfo formatInfo) {
-        SabrManifestParser parser = new SabrManifestParser();
-        return parser.parse(formatInfo);
     }
 
     private DashManifest getManifest(MediaItemFormatInfo formatInfo) {
@@ -365,10 +346,6 @@ public class ExoMediaSourceFactory {
     }
 
     @NonNull
-    private SabrChunkSource.Factory getSabrChunkSourceFactory() {
-        return new DefaultSabrChunkSource.Factory(getMediaDataSourceFactory(), MAX_SEGMENTS_PER_LOAD);
-    }
-
     @NonNull
     private DashChunkSource.Factory getDashChunkSourceFactory() {
         return new DefaultDashChunkSource.Factory(getMediaDataSourceFactory(), MAX_SEGMENTS_PER_LOAD);

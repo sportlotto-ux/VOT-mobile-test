@@ -13,11 +13,6 @@ import androidx.media3.exoplayer.ExoPlayer;
 import androidx.media3.exoplayer.audio.AudioAttributes;
 import androidx.media3.exoplayer.drm.DefaultDrmSessionManager;
 import androidx.media3.exoplayer.drm.DrmSessionManager;
-import androidx.media3.exoplayer.drm.ExoMediaDrm.KeyRequest;
-import androidx.media3.exoplayer.drm.ExoMediaDrm.ProvisionRequest;
-import androidx.media3.exoplayer.drm.FrameworkMediaCrypto;
-import androidx.media3.exoplayer.drm.MediaDrmCallback;
-import androidx.media3.exoplayer.drm.UnsupportedDrmException;
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector;
 import androidx.media3.exoplayer.upstream.BandwidthMeter;
 import androidx.media3.datasource.TransferListener;
@@ -206,23 +201,8 @@ public class ExoPlayerInitializer {
         mPlayer = null;
     }
 
-    private DrmSessionManager<FrameworkMediaCrypto> createDrmManager() {
-        try {
-            return DefaultDrmSessionManager.newWidevineInstance(new MediaDrmCallback() {
-                @Override
-                public byte[] executeProvisionRequest(UUID uuid, ProvisionRequest request) {
-                    return new byte[0];
-                }
-
-                @Override
-                public byte[] executeKeyRequest(UUID uuid, KeyRequest request) {
-                    return new byte[0];
-                }
-            }, null);
-        } catch (UnsupportedDrmException e) {
-            e.printStackTrace();
-        }
-
+    // TODO(media3): rewire DRM to media3 DefaultDrmSessionManager.Builder if ever needed
+    private DrmSessionManager createDrmManager() {
         return null;
     }
 

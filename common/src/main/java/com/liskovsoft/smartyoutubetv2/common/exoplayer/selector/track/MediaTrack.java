@@ -1,8 +1,8 @@
 package com.liskovsoft.smartyoutubetv2.common.exoplayer.selector.track;
 
 import androidx.media3.common.Format;
-import androidx.media3.exoplayer.source.TrackGroupArray;
-import androidx.media3.exoplayer.trackselection.TrackSelection.Definition;
+import androidx.media3.common.TrackGroupArray;
+import androidx.media3.exoplayer.trackselection.ExoTrackSelection.Definition;
 import com.liskovsoft.sharedutils.helpers.Helpers;
 import com.liskovsoft.smartyoutubetv2.common.exoplayer.selector.TrackSelectorManager;
 import com.liskovsoft.smartyoutubetv2.common.exoplayer.selector.TrackSelectorUtil;

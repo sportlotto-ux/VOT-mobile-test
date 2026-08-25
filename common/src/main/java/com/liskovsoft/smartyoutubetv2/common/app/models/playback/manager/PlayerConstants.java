@@ -1,6 +1,6 @@
 package com.liskovsoft.smartyoutubetv2.common.app.models.playback.manager;
 
-import androidx.media3.exoplayer.ui.AspectRatioFrameLayout;
+import androidx.media3.ui.AspectRatioFrameLayout;
 
 public interface PlayerConstants {
     int PLAYBACK_MODE_PAUSE = 0;

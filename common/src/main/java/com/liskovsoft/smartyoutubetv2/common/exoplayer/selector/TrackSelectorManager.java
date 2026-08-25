@@ -7,19 +7,20 @@ import android.util.Pair;
 
 import androidx.media3.common.Format;
 import androidx.media3.exoplayer.source.TrackGroup;
-import androidx.media3.exoplayer.source.TrackGroupArray;
+import androidx.media3.common.TrackGroupArray;
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector;
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector.Parameters;
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector.SelectionOverride;
 import androidx.media3.exoplayer.trackselection.MappingTrackSelector.MappedTrackInfo;
-import androidx.media3.exoplayer.trackselection.TrackSelection;
-import androidx.media3.exoplayer.trackselection.TrackSelection.Definition;
+import androidx.media3.exoplayer.trackselection.ExoTrackSelection;
+import androidx.media3.exoplayer.trackselection.ExoTrackSelection.Definition;
+
 import com.liskovsoft.sharedutils.helpers.Helpers;
 import com.liskovsoft.sharedutils.mylogger.Log;
 import com.liskovsoft.smartyoutubetv2.common.exoplayer.selector.track.AudioTrack;
 import com.liskovsoft.smartyoutubetv2.common.exoplayer.selector.track.MediaTrack;
 import com.liskovsoft.smartyoutubetv2.common.exoplayer.selector.track.VideoTrack;
-import com.liskovsoft.smartyoutubetv2.common.exoplayer.versions.selector.RestoreTrackSelector;
+import androidx.media3.exoplayer.trackselection.RestoreTrackSelector;
 import com.liskovsoft.smartyoutubetv2.common.exoplayer.versions.selector.RestoreTrackSelector.TrackSelectorCallback;
 import com.liskovsoft.smartyoutubetv2.common.prefs.PlayerData;
 import com.liskovsoft.smartyoutubetv2.common.prefs.PlayerTweaksData;
@@ -353,7 +354,7 @@ public class TrackSelectorManager implements TrackSelectorCallback {
             SelectionOverride override = params.getSelectionOverride(rendererIndex, rendererTrackGroups);
 
             if (override != null) {
-                definition = new TrackSelection.Definition(
+                definition = new ExoTrackSelection.Definition(
                                 rendererTrackGroups.get(override.groupIndex),
                                 override.tracks,
                                 override.reason,
