@@ -78,6 +78,8 @@ dependencies {
     api 'androidx.media3:media3-exoplayer:' + media3Version
     api 'androidx.media3:media3-exoplayer-dash:' + media3Version
     api 'androidx.media3:media3-exoplayer-hls:' + media3Version
+    api 'androidx.media3:media3-exoplayer-smoothstreaming:' + media3Version
+    api 'androidx.media3:media3-ui:' + media3Version
     api 'androidx.media3:media3-datasource:' + media3Version
     api 'androidx.media3:media3-datasource-okhttp:' + media3Version
     api 'androidx.media3:media3-datasource-cronet:' + media3Version

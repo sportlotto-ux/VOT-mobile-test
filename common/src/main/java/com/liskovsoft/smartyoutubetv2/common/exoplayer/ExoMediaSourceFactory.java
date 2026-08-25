@@ -294,7 +294,7 @@ public class ExoMediaSourceFactory {
         return dataSourceFactory;
     }
 
-    private static void addCommonHeaders(BaseFactory dataSourceFactory) {
+    private static void addCommonHeaders(HttpDataSource.BaseFactory dataSourceFactory) {
         // Doesn't work
         // Trying to fix 429 error (too many requests)
         //String authorization = RetrofitOkHttpHelper.getAuthHeaders().get("Authorization");

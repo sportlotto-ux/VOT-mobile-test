@@ -21,7 +21,7 @@ import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Set;
 
-public class TrackErrorFixer extends MediaSourceEventListener {
+public class TrackErrorFixer implements MediaSourceEventListener {
     private static final int BLACKLIST_CHECK_MS = 1_000;
     private static final int BLACKLIST_CLEAR_MS = 10_000;
     private static final String TAG = TrackErrorFixer.class.getSimpleName();

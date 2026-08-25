@@ -16,12 +16,12 @@ public class RestoreTrackSelector extends DefaultTrackSelector {
     private TrackSelectorCallback mCallback;
 
     public interface TrackSelectorCallback {
-        Pair<Definition, MediaTrack> onSelectVideoTrack(TrackGroupArray groups, Parameters params);
-        Pair<Definition, MediaTrack> onSelectAudioTrack(TrackGroupArray groups, Parameters params);
-        Pair<Definition, MediaTrack> onSelectSubtitleTrack(TrackGroupArray groups, Parameters params);
-        void updateVideoTrackSelection(TrackGroupArray groups, Parameters params, Definition definition);
-        void updateAudioTrackSelection(TrackGroupArray groups, Parameters params, Definition definition);
-        void updateSubtitleTrackSelection(TrackGroupArray groups, Parameters params, Definition definition);
+        Pair<ExoTrackSelection.Definition, MediaTrack> onSelectVideoTrack(TrackGroupArray groups, Parameters params);
+        Pair<ExoTrackSelection.Definition, MediaTrack> onSelectAudioTrack(TrackGroupArray groups, Parameters params);
+        Pair<ExoTrackSelection.Definition, MediaTrack> onSelectSubtitleTrack(TrackGroupArray groups, Parameters params);
+        void updateVideoTrackSelection(TrackGroupArray groups, Parameters params, ExoTrackSelection.Definition definition);
+        void updateAudioTrackSelection(TrackGroupArray groups, Parameters params, ExoTrackSelection.Definition definition);
+        void updateSubtitleTrackSelection(TrackGroupArray groups, Parameters params, ExoTrackSelection.Definition definition);
     }
 
     public RestoreTrackSelector(Factory trackSelectionFactory) {
@@ -120,10 +120,10 @@ public class RestoreTrackSelector extends DefaultTrackSelector {
     // Exo 2.10 and up
     @Nullable
     @Override
-    protected Definition selectVideoTrack(TrackGroupArray groups, int[][] formatSupports, int mixedMimeTypeAdaptationSupports,
+    protected ExoTrackSelection.Definition selectVideoTrack(TrackGroupArray groups, int[][] formatSupports, int mixedMimeTypeAdaptationSupports,
                                               Parameters params, boolean enableAdaptiveTrackSelection) throws ExoPlaybackException {
         if (mCallback != null) {
-            Pair<Definition, MediaTrack> resultPair = mCallback.onSelectVideoTrack(groups, params);
+            Pair<ExoTrackSelection.Definition, MediaTrack> resultPair = mCallback.onSelectVideoTrack(groups, params);
 
             if (resultPair != null) {
                 Log.d(TAG, "selectVideoTrack: choose custom video processing");
@@ -135,7 +135,7 @@ public class RestoreTrackSelector extends DefaultTrackSelector {
 
         Log.d(TAG, "selectVideoTrack: choose default video processing");
 
-        Definition definition = super.selectVideoTrack(groups, formatSupports, mixedMimeTypeAdaptationSupports, params, false);
+        ExoTrackSelection.Definition definition = super.selectVideoTrack(groups, formatSupports, mixedMimeTypeAdaptationSupports, params, false);
 
         // Don't invoke if track already has been selected by the app
         if (mCallback != null && definition != null) {
@@ -148,10 +148,10 @@ public class RestoreTrackSelector extends DefaultTrackSelector {
     // Exo 2.10 and up
     @Nullable
     @Override
-    protected Pair<Definition, AudioTrackScore> selectAudioTrack(TrackGroupArray groups, int[][] formatSupports,
+    protected Pair<ExoTrackSelection.Definition, AudioTrackScore> selectAudioTrack(TrackGroupArray groups, int[][] formatSupports,
                                                                  int mixedMimeTypeAdaptationSupports, Parameters params, boolean enableAdaptiveTrackSelection) throws ExoPlaybackException {
         if (mCallback != null) {
-            Pair<Definition, MediaTrack> resultPair = mCallback.onSelectAudioTrack(groups, params);
+            Pair<ExoTrackSelection.Definition, MediaTrack> resultPair = mCallback.onSelectAudioTrack(groups, params);
             if (resultPair != null) {
                 Log.d(TAG, "selectVideoTrack: choose custom audio processing");
                 return new Pair<>(resultPair.first, new AudioTrackScore(resultPair.second.format, params, RendererCapabilities.FORMAT_HANDLED));
@@ -162,7 +162,7 @@ public class RestoreTrackSelector extends DefaultTrackSelector {
 
         Log.d(TAG, "selectAudioTrack: choose default audio processing");
 
-        Pair<Definition, AudioTrackScore> definitionPair = super.selectAudioTrack(groups, formatSupports,
+        Pair<ExoTrackSelection.Definition, AudioTrackScore> definitionPair = super.selectAudioTrack(groups, formatSupports,
                 mixedMimeTypeAdaptationSupports, params, false);
 
         // Don't invoke if track already has been selected by the app
@@ -176,10 +176,10 @@ public class RestoreTrackSelector extends DefaultTrackSelector {
     // Exo 2.10 and up
     @Nullable
     @Override
-    protected Pair<Definition, TextTrackScore> selectTextTrack(TrackGroupArray groups, int[][] formatSupport, Parameters params,
+    protected Pair<ExoTrackSelection.Definition, TextTrackScore> selectTextTrack(TrackGroupArray groups, int[][] formatSupport, Parameters params,
                                                                @Nullable String selectedAudioLanguage) throws ExoPlaybackException {
         if (mCallback != null) {
-            Pair<Definition, MediaTrack> resultPair = mCallback.onSelectSubtitleTrack(groups, params);
+            Pair<ExoTrackSelection.Definition, MediaTrack> resultPair = mCallback.onSelectSubtitleTrack(groups, params);
             if (resultPair != null) {
                 Log.d(TAG, "selectTextTrack: choose custom text processing");
                 return new Pair<>(resultPair.first, new TextTrackScore(resultPair.second.format, params, RendererCapabilities.FORMAT_HANDLED, ""));
@@ -188,7 +188,7 @@ public class RestoreTrackSelector extends DefaultTrackSelector {
 
         Log.d(TAG, "selectTextTrack: choose default text processing");
 
-        Pair<Definition, TextTrackScore> definitionPair = super.selectTextTrack(groups, formatSupport, params, selectedAudioLanguage);
+        Pair<ExoTrackSelection.Definition, TextTrackScore> definitionPair = super.selectTextTrack(groups, formatSupport, params, selectedAudioLanguage);
 
         // Don't invoke if track already has been selected by the app
         if (mCallback != null && definitionPair != null) {
