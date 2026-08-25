@@ -34,9 +34,23 @@ allprojects {
         maven { url 'https://jitpack.io' }
         //flatDir { dirs 'libs' } // include duktape-my to all subprojects
         // IntelliJ 'Read timed out' (error 403)
-        // https://stackoverflow.com/questions/74258160/is-jcenter-down-permanently-31-oct
+        // https://stackoverflow.com/a/74258160
         //jcenter()
     }
+
+    // Migration to media3: androidx.media3 requires minSdk >= 21.
+    // Raise minSdk for every module regardless of the pinned SharedModules/constants.gradle value.
+    afterEvaluate { project ->
+        def androidExt = project.extensions.findByName('android')
+        if (androidExt != null && androidExt.defaultConfig != null) {
+            def current = androidExt.defaultConfig.minSdkVersion
+            int currentApi = current == null ? 14 : current.apiLevel
+            if (currentApi < 21) {
+                androidExt.defaultConfig.minSdkVersion 21
+            }
+        }
+    }
+}
     configurations.all {
         // WorkManager conflict resolution (lint exception: old java runtime)
         // resolutionStrategy.force 'androidx.lifecycle:lifecycle-livedata-core:' + liveDataVersion
