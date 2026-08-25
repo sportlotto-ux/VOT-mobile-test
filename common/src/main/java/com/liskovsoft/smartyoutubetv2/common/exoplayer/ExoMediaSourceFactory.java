@@ -37,11 +37,20 @@ import androidx.media3.exoplayer.upstream.BandwidthMeter;
 import androidx.media3.exoplayer.upstream.DefaultBandwidthMeter;
 import androidx.media3.common.util.Util;
 import com.liskovsoft.mediaserviceinterfaces.data.MediaItemFormatInfo;
+import com.liskovsoft.mediaserviceinterfaces.data.MediaFormat;
+import com.liskovsoft.youtubeapi.formatbuilders.utils.MediaFormatUtils;
+
+import app.votube.sabr.manifest.SabrManifest;
+import app.votube.sabr.manifest.SabrStreamInfo;
+import app.votube.sabr.player.SabrMediaSource;
+import app.votube.sabr.parser.PoTokenProvider;
 import com.liskovsoft.sharedutils.cronet.CronetManager;
 import com.liskovsoft.sharedutils.helpers.FileHelpers;
+import com.liskovsoft.sharedutils.helpers.Helpers;
 import com.liskovsoft.sharedutils.mylogger.Log;
 import com.liskovsoft.sharedutils.okhttp.OkHttpManager;
 import com.liskovsoft.smartyoutubetv2.common.exoplayer.errors.DashDefaultLoadErrorHandlingPolicy;
+import com.liskovsoft.smartyoutubetv2.common.exoplayer.errors.SabrDefaultLoadErrorHandlingPolicy;
 import com.liskovsoft.smartyoutubetv2.common.exoplayer.errors.TrackErrorFixer;
 import com.liskovsoft.smartyoutubetv2.common.prefs.PlayerTweaksData;
 import com.liskovsoft.smartyoutubetv2.common.utils.Utils;
@@ -49,6 +58,7 @@ import com.liskovsoft.googlecommon.common.helpers.DefaultHeaders;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.Executors;
 
@@ -180,9 +190,92 @@ public class ExoMediaSourceFactory {
     }
 
     private MediaSource buildSabrMediaSource(MediaItemFormatInfo formatInfo) {
-        // TODO(media3): rewire SABR to the app.votube.sabr module (media3 SabrMediaSource)
-        Log.e(TAG, "buildSabrMediaSource: SABR is not yet available on media3, falling back to DASH");
-        return buildDashMediaSource(formatInfo);
+        if (TextUtils.isEmpty(formatInfo.getServerAbrStreamingUrl())
+                || TextUtils.isEmpty(formatInfo.getVideoPlaybackUstreamerConfig())) {
+            Log.e(TAG, "buildSabrMediaSource: SABR data is missing, falling back to DASH");
+            return buildDashMediaSource(formatInfo);
+        }
+
+        SabrManifest manifest = new SabrManifest(
+                formatInfo.getVideoId(),
+                formatInfo.getServerAbrStreamingUrl(),
+                formatInfo.getVideoPlaybackUstreamerConfig(),
+                getDurationMs(formatInfo),
+                toSabrStreamInfos(formatInfo));
+
+        final byte[] poToken = decodePoToken(formatInfo.getPoToken());
+        PoTokenProvider poTokenProvider = videoId -> poToken;
+
+        MediaItem mediaItem = new MediaItem.Builder()
+                .setUri("sabr://" + formatInfo.getVideoId())
+                .build();
+
+        return new SabrMediaSource.Factory(mContext, manifest, poTokenProvider)
+                .setLoadErrorHandlingPolicy(new SabrDefaultLoadErrorHandlingPolicy())
+                .createMediaSource(mediaItem);
+    }
+
+    private static long getDurationMs(MediaItemFormatInfo formatInfo) {
+        long lenSeconds = Helpers.parseLong(formatInfo.getLengthSeconds());
+        return lenSeconds > 0 ? lenSeconds * 1_000 : C.TIME_UNSET;
+    }
+
+    private static List<SabrStreamInfo> toSabrStreamInfos(MediaItemFormatInfo formatInfo) {
+        List<SabrStreamInfo> result = new ArrayList<>();
+        List<MediaFormat> formats = formatInfo.getAdaptiveFormats();
+        if (formats == null) {
+            return result;
+        }
+        for (MediaFormat fmt : formats) {
+            try {
+                Integer fps = null;
+                float parsedFps = Helpers.parseFloat(fmt.getFps(), -1);
+                if (parsedFps > 0) {
+                    fps = Math.round(parsedFps);
+                }
+                Long durationMs = fmt.getApproxDurationMs() > 0 ? (long) fmt.getApproxDurationMs() : null;
+                result.add(new SabrStreamInfo(
+                        Helpers.parseInt(fmt.getITag(), -1),
+                        Helpers.parseLong(fmt.getLmt()),
+                        fmt.getXtags(),
+                        MediaFormatUtils.extractMimeType(fmt),
+                        extractCodecsSafe(fmt),
+                        Helpers.parseInt(fmt.getBitrate(), -1),
+                        fps,
+                        fmt.getWidth() > 0 ? fmt.getWidth() : null,
+                        fmt.getHeight() > 0 ? fmt.getHeight() : null,
+                        durationMs,
+                        !TextUtils.isEmpty(fmt.getAudioTrackId()) ? fmt.getAudioTrackId() : null,
+                        null,
+                        !TextUtils.isEmpty(fmt.getLanguage()) ? fmt.getLanguage() : null,
+                        fmt.isDrc()));
+            } catch (Exception e) {
+                Log.e(TAG, "toSabrStreamInfos: broken media format: %s", e.getMessage());
+            }
+        }
+        return result;
+    }
+
+    private static String extractCodecsSafe(MediaFormat fmt) {
+        try {
+            String codecs = MediaFormatUtils.extractCodecs(fmt);
+            return TextUtils.isEmpty(codecs) ? null : codecs;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    @Nullable
+    private static byte[] decodePoToken(String poToken) {
+        if (TextUtils.isEmpty(poToken)) {
+            return null;
+        }
+        try {
+            return android.util.Base64.decode(poToken, android.util.Base64.URL_SAFE);
+        } catch (Exception e) {
+            Log.e(TAG, "decodePoToken failed: %s", e.getMessage());
+            return null;
+        }
     }
 
     private MediaSource buildDashMediaSource(MediaItemFormatInfo formatInfo) {
