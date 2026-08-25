@@ -93,7 +93,10 @@ public class VoiceOverTranslationController extends BasePlayerController {
                 }
                 VotApiServiceImpl service = new VotApiServiceImpl(c);
                 String requestLang = "auto";
-                Log.e("VOT_UI", "calling translate url=" + videoUrl + " retry=" + retryCount);
+                try {
+                    if (VotSettings.instance(c).isUseLivelyVoice()) requestLang = "en";
+                } catch (Exception ignored) {}
+                Log.e("VOT_UI", "calling translate url=" + videoUrl + " retry=" + retryCount + " reqLang=" + requestLang + " lively=" + requestLang.equals("en"));
                 VotTranslateResult result = service.translate(videoUrl, title, durationSec, requestLang, "ru", formatInfo, video.videoId, progress -> {
                     Log.e("VOT_UI", "progress " + progress);
                 });

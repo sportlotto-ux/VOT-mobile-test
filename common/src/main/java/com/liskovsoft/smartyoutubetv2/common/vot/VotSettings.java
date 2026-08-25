@@ -47,6 +47,12 @@ public final class VotSettings
             edit.putBoolean("lively_default_off_20260326", true);
             n = 1;
         }
+        // enable lively by default for en->ru (fix 66ef82d5aa7b: not lively)
+        if (!mPrefs.getBoolean("lively_default_on_20260825", false)) {
+            edit.putBoolean("use_lively_voice", true);
+            edit.putBoolean("lively_default_on_20260825", true);
+            n = 1;
+        }
         if (!this.mPrefs.contains("original_volume_percent")) {
             edit.putInt("original_volume_percent", 10);
             n = 1;
