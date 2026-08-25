@@ -346,12 +346,11 @@ public class ExoMediaSourceFactory {
     }
 
     @NonNull
-    @NonNull
     private DashChunkSource.Factory getDashChunkSourceFactory() {
         return new DefaultDashChunkSource.Factory(getMediaDataSourceFactory(), MAX_SEGMENTS_PER_LOAD);
     }
 
-    private Factory getMediaDataSourceFactory() {
+    private DataSource.Factory getMediaDataSourceFactory() {
         if (mMediaDataSourceFactory == null) {
             mMediaDataSourceFactory = buildDataSourceFactory(USE_BANDWIDTH_METER);
         }
