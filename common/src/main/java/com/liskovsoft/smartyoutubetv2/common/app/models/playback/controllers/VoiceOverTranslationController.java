@@ -72,7 +72,12 @@ public class VoiceOverTranslationController extends BasePlayerController {
 
         String videoUrl = "https://www.youtube.com/watch?v=" + video.videoId;
         String title = video.getTitle() != null ? video.getTitle() : "";
-        int durationSec = video.getDurationMs() > 0 ? (int)(video.getDurationMs()/1000) : 300;
+        long playerDur = getPlayer() != null ? getPlayer().getDurationMs() : -1;
+        long videoDur = video.getDurationMs();
+        int durationSec = 300;
+        if (playerDur > 0) durationSec = (int)(playerDur / 1000);
+        else if (videoDur > 0) durationSec = (int)(videoDur / 1000);
+        android.util.Log.e("VOT_UI", "duration choose playerDur=" + playerDur + " videoDur=" + videoDur + " -> durationSec=" + durationSec);
 
         runTranslateWithRetry(videoUrl, title, durationSec, formatInfo, video, ctx, loader, 0);
     }

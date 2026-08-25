@@ -170,12 +170,25 @@ public class ExoPlayerController implements Player.EventListener {
             mTranslationPlayer.prepare(audioSource);
             mTranslationPlayer.seekTo(Math.max(0, pos));
             try { mTranslationPlayer.setPlaybackParameters(mPlayer.getPlaybackParameters()); } catch (Exception e) {}
+            // listen for translation ready to correct initial 10s buffering delay
+            mTranslationPlayer.addListener(new Player.EventListener() {
+                @Override public void onPlayerStateChanged(boolean playWhenReady, int playbackState) {
+                    android.util.Log.e("VOT_SYNC", "trans state=" + TrackSelectorUtil.stateToString(playbackState) + " playWhenReady=" + playWhenReady + " vPos=" + (mPlayer!=null?mPlayer.getCurrentPosition():-1) + " aPos=" + mTranslationPlayer.getCurrentPosition());
+                    if (playbackState == Player.STATE_READY) {
+                        // media ready: force re-sync (vot does lipSync on playing)
+                        mSyncHandler.post(() -> lipSync(isVideoPlaying() ? "playing" : "seeked"));
+                    } else if (playbackState == Player.STATE_BUFFERING) {
+                        // while buffering keep translation paused like waiting
+                        // will resume on READY
+                    }
+                }
+            });
             // initial lipSync like vot: sync time/rate and then play/pause based on video state
             if (isVideoPlaying()) {
                 mTranslationPlayer.setPlayWhenReady(true);
                 mSyncHandler.removeCallbacks(mSyncRunnable);
                 mSyncHandler.postDelayed(mSyncRunnable, SYNC_INTERVAL_MS);
-                android.util.Log.e("VOT_SYNC", "attach playing -> start drift sync");
+                android.util.Log.e("VOT_SYNC", "attach playing -> start drift sync vPos=" + pos);
             } else if (!mPlayer.getPlayWhenReady()) {
                 mTranslationPlayer.setPlayWhenReady(false);
                 android.util.Log.e("VOT_SYNC", "attach paused -> pause translation");
@@ -184,6 +197,15 @@ public class ExoPlayerController implements Player.EventListener {
                 mTranslationPlayer.setPlayWhenReady(false);
                 android.util.Log.e("VOT_SYNC", "attach waiting -> pause translation");
             }
+            // also schedule immediate drift check to detect 10s offset
+            mSyncHandler.postDelayed(() -> {
+                if (mTranslationPlayer != null && mTranslationOverlayActive) {
+                    long v = mPlayer.getCurrentPosition();
+                    long a = mTranslationPlayer.getCurrentPosition();
+                    android.util.Log.e("VOT_SYNC", "post-attach drift check v=" + v + " a=" + a + " diff=" + Math.abs(v-a));
+                    if (Math.abs(v-a) > DRIFT_THRESHOLD_MS) lipSync("seeked");
+                }
+            }, 1500);
         } catch (Exception e) { android.util.Log.e("VOT_VOL", "attach failed", e); releaseTranslationAudioPlayer(); }
     }
     private void releaseTranslationAudioPlayer() {
