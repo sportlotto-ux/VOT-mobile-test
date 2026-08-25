@@ -4,9 +4,11 @@
 
 package com.liskovsoft.smartyoutubetv2.common.vot;
 
-import java.nio.charset.StandardCharsets;
+import android.annotation.SuppressLint;
+import java.nio.charset.Charset;
 import java.io.ByteArrayOutputStream;
 
+@SuppressLint("NewApi")
 final class VotProtoUtils
 {
     static final int STATUS_AUDIO_REQUESTED = 6;
@@ -183,7 +185,7 @@ final class VotProtoUtils
         if (s == null) {
             return;
         }
-        writeBytes(byteArrayOutputStream, n, s.getBytes(StandardCharsets.UTF_8));
+        writeBytes(byteArrayOutputStream, n, s.getBytes(Charset.forName("UTF-8")));
     }
     
     private static void writeTag(final ByteArrayOutputStream byteArrayOutputStream, final int n, final int n2) {
@@ -230,7 +232,7 @@ final class VotProtoUtils
         }
         
         String readString() {
-            return new String(this.readLengthDelimited(), StandardCharsets.UTF_8);
+            return new String(this.readLengthDelimited(), Charset.forName("UTF-8"));
         }
         
         int readVarint32() {

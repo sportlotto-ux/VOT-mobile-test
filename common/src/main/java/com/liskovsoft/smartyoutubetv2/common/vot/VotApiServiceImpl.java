@@ -9,11 +9,13 @@ import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.RequestBody;
 import okhttp3.Response;
-import java.nio.charset.StandardCharsets;
+import android.annotation.SuppressLint;
+import java.nio.charset.Charset;
 import java.util.concurrent.TimeUnit;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 
+@SuppressLint("NewApi")
 public class VotApiServiceImpl implements VotApiService {
     private static final String WORKER_HOST = "vot-worker.vtrans.eu.cc";
     private static final String HMAC_KEY = "bt8xH3VOlb4mqf0nqAibnDOoiPlXsisf";
@@ -92,7 +94,7 @@ public class VotApiServiceImpl implements VotApiService {
 
     private String hmacHex(String key, byte[] data) throws Exception {
         Mac mac = Mac.getInstance("HmacSHA256");
-        mac.init(new SecretKeySpec(key.getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
+        mac.init(new SecretKeySpec(key.getBytes(Charset.forName("UTF-8")), "HmacSHA256"));
         byte[] out = mac.doFinal(data);
         StringBuilder sb = new StringBuilder();
         for (byte b : out) sb.append(String.format("%02x", b));
@@ -102,7 +104,7 @@ public class VotApiServiceImpl implements VotApiService {
     private byte[] postProtobuf(String path, byte[] body) throws Exception {
         String sig = hmacHex(HMAC_KEY, body);
         String token = lastUuid + ":" + path + ":" + COMPONENT_VERSION;
-        String tokenSig = hmacHex(HMAC_KEY, token.getBytes(StandardCharsets.UTF_8));
+        String tokenSig = hmacHex(HMAC_KEY, token.getBytes(Charset.forName("UTF-8")));
         JSONObject headers = new JSONObject();
         headers.put("User-Agent", USER_AGENT);
         headers.put("Accept", "application/x-protobuf");
