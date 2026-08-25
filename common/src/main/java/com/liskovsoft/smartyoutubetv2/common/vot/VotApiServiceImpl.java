@@ -10,6 +10,7 @@ import okhttp3.Request;
 import okhttp3.RequestBody;
 import okhttp3.Response;
 import android.annotation.SuppressLint;
+import android.util.Log;
 import java.nio.charset.Charset;
 import java.util.concurrent.TimeUnit;
 import javax.crypto.Mac;
@@ -17,6 +18,7 @@ import javax.crypto.spec.SecretKeySpec;
 
 @SuppressLint("NewApi")
 public class VotApiServiceImpl implements VotApiService {
+    private static final String TAG = "VOT";
     private static final String WORKER_HOST = "vot-worker.vtrans.eu.cc";
     private static final String HMAC_KEY = "bt8xH3VOlb4mqf0nqAibnDOoiPlXsisf";
     private static final String COMPONENT_VERSION = "26.6.4.760";
@@ -38,25 +40,31 @@ public class VotApiServiceImpl implements VotApiService {
     @Override
     public VotTranslateResult translate(String url, String title, int duration, String requestLang, String responseLang, MediaItemFormatInfo formatInfo, String videoId, ProgressListener listener) {
         try {
+            Log.e(TAG, "translate start url=" + url + " dur=" + duration + " title=" + title);
             if (listener != null) listener.onProgress("start");
             ensureSession();
+            Log.e(TAG, "session ok secret len=" + (secretKey != null ? secretKey.length() : 0));
             if (listener != null) listener.onProgress("session_ok");
             String path = "/video-translation/translate";
             boolean useLively = false;
             try { useLively = VotSettings.instance(mContext).isUseLivelyVoice(); } catch (Exception ignored) {}
             byte[] body = VotProtoUtils.encodeTranslationRequest(url, duration, requestLang, responseLang, title, false, useLively);
+            Log.e(TAG, "translate body len=" + body.length + " hex=" + hmacHex(HMAC_KEY, body).substring(0,8));
             byte[] resp = postProtobuf(path, body);
             if (resp == null) {
+                Log.e(TAG, "worker translate null (400) url=" + url);
                 return new VotTranslateResult(false, 0, null, "worker 400", "FAILED", "worker 400", null);
             }
+            Log.e(TAG, "translate resp len=" + resp.length);
             VotProtoUtils.TranslationResponse tr = VotProtoUtils.decodeTranslationResponse(resp);
-            // Map status int to string
             String statusStr = statusToString(tr.status);
             boolean translated = tr.status == VotProtoUtils.STATUS_FINISHED && tr.url != null && !tr.url.isEmpty();
             String dbg = "status=" + tr.status + " url=" + (tr.url != null ? tr.url.substring(0, Math.min(40, tr.url.length())) : "null");
             if (tr.message != null && !tr.message.isEmpty()) dbg += " msg=" + tr.message;
+            Log.e(TAG, "translate result " + dbg + " translated=" + translated);
             return new VotTranslateResult(translated, tr.remainingTime, tr.url, tr.message, statusStr, dbg, tr.translationId);
         } catch (Exception e) {
+            Log.e(TAG, "translate exception", e);
             return new VotTranslateResult(false, 0, null, e.getMessage(), "FAILED", e.getMessage(), null);
         }
     }
@@ -75,6 +83,7 @@ public class VotApiServiceImpl implements VotApiService {
 
     private synchronized void ensureSession() throws Exception {
         if (secretKey != null) return;
+        Log.e(TAG, "ensureSession start");
         String uuid = generateUuid();
         byte[] body = VotProtoUtils.encodeSessionRequest(uuid, "video-translation");
         byte[] resp = postProtobufForSession("/session/create", body);
@@ -82,6 +91,7 @@ public class VotApiServiceImpl implements VotApiService {
         VotProtoUtils.SessionResponse sr = VotProtoUtils.decodeSessionResponse(resp);
         secretKey = sr.secretKey;
         lastUuid = uuid;
+        Log.e(TAG, "ensureSession ok secret len=" + (secretKey != null ? secretKey.length() : 0));
     }
 
     private String generateUuid() {
@@ -131,12 +141,14 @@ public class VotApiServiceImpl implements VotApiService {
         JSONArray arr = new JSONArray();
         for (byte b : body) arr.put(b & 0xFF);
         json.put("body", arr);
+        Log.e(TAG, "postViaWorker " + path + " bodyLen=" + body.length + " headers=" + headers.toString().substring(0, Math.min(200, headers.toString().length())));
         Request req = new Request.Builder()
                 .url("https://" + WORKER_HOST + path)
                 .post(RequestBody.create(JSON, json.toString()))
                 .build();
         try (Response resp = client.newCall(req).execute()) {
             byte[] bytes = resp.body() != null ? resp.body().bytes() : null;
+            Log.e(TAG, "postViaWorker resp " + path + " code=" + resp.code() + " len=" + (bytes != null ? bytes.length : -1) + " head=" + (bytes != null ? new String(bytes, 0, Math.min(bytes.length, 300), Charset.forName("UTF-8")) : "null"));
             if (!resp.isSuccessful()) return null;
             return bytes;
         }

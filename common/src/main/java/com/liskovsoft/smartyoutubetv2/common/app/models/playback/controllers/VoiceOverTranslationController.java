@@ -3,6 +3,7 @@ package com.liskovsoft.smartyoutubetv2.common.app.models.playback.controllers;
 import android.content.Context;
 import android.os.Handler;
 import android.os.Looper;
+import android.util.Log;
 import com.liskovsoft.mediaserviceinterfaces.data.MediaItemFormatInfo;
 import com.liskovsoft.sharedutils.helpers.MessageHelpers;
 import com.liskovsoft.smartyoutubetv2.common.R;
@@ -33,6 +34,7 @@ public class VoiceOverTranslationController extends BasePlayerController {
     public void requestTranslation() {
         Video video = getVideo();
         Context ctx = getContext();
+        Log.e("VOT_UI", "requestTranslation video=" + (video != null ? video.videoId : "null"));
         if (video == null || video.videoId == null || video.videoId.isEmpty()) {
             if (ctx != null) MessageHelpers.showMessage(ctx, R.string.voice_over_translate_no_video);
             return;
@@ -41,7 +43,10 @@ public class VoiceOverTranslationController extends BasePlayerController {
             if (ctx != null) MessageHelpers.showMessage(ctx, R.string.voice_over_translate_no_live);
             return;
         }
-        if (mRequestInProgress) return;
+        if (mRequestInProgress) {
+            Log.e("VOT_UI", "already in progress, ignore");
+            return;
+        }
 
         // toggle off if already enabled for this video
         if (video.videoId.equals(mTranslationEnabledForVideoId)) {
@@ -75,18 +80,21 @@ public class VoiceOverTranslationController extends BasePlayerController {
                 if (c == null) return;
                 VotApiServiceImpl service = new VotApiServiceImpl(c);
                 String requestLang = "auto";
-                // try to detect from formatInfo if available
+                Log.e("VOT_UI", "calling translate url=" + videoUrl);
                 VotTranslateResult result = service.translate(videoUrl, title, durationSec, requestLang, "ru", formatInfo, video.videoId, progress -> {
+                    Log.e("VOT_UI", "progress " + progress);
                     mHandler.post(() -> {
-                        // could update waiting status
                     });
                 });
+                Log.e("VOT_UI", "translate result ready=" + (result != null ? result.isReady() : "null") + " url=" + (result != null ? result.url : "null") + " status=" + (result != null ? result.status : "null") + " msg=" + (result != null ? result.message : "null") + " debug=" + (result != null ? result.debug : "null"));
                 mHandler.post(() -> {
                     mRequestInProgress = false;
                     if (result != null && result.isReady() && result.url != null) {
                         String proxied = VotSettings.instance(c).proxifyAudioUrl(result.url);
+                        Log.e("VOT_UI", "reopenWithTranslationAudio proxied=" + proxied);
                         boolean ok = false;
                         if (loader != null) ok = loader.reopenWithTranslationAudio(proxied);
+                        Log.e("VOT_UI", "reopen ok=" + ok);
                         if (ok) {
                             mTranslationEnabledForVideoId = video.videoId;
                             mTranslationAudioUrl = proxied;
@@ -96,11 +104,13 @@ public class VoiceOverTranslationController extends BasePlayerController {
                         }
                     } else {
                         String msg = result != null && result.message != null ? result.message : c.getString(R.string.voice_over_translate_error);
+                        Log.e("VOT_UI", "translate failed msg=" + msg);
                         MessageHelpers.showMessage(c, msg);
                     }
                     updateUiState();
                 });
             } catch (Exception e) {
+                Log.e("VOT_UI", "translate exception", e);
                 mHandler.post(() -> {
                     mRequestInProgress = false;
                     updateUiState();
