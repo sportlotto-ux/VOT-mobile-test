@@ -2,7 +2,7 @@ name: Build Debug APK
 
 on:
   push:
-    branches: [ "master", "smarttube", "smartertube", "vot-base", "smarttube-stable", "smartertube-stable", "unified" ]
+    branches: [ "master", "smarttube", "smartertube", "vot-base", "smarttube-stable", "smartertube-stable", "unified", "media3-sabr" ]
   workflow_dispatch:
 
 jobs:
@@ -43,6 +43,9 @@ jobs:
     
       - name: Grant Gradle permissions
         run: chmod +x gradlew
+
+      - name: Build sabr-media3 module
+        run: ./gradlew :sabr-media3:assembleRelease
 
       - name: Lint with Gradle
         run: ./gradlew lintStbetaDebug

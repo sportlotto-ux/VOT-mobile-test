@@ -1,0 +1,13 @@
+package app.votube.sabr.manifest
+
+import androidx.media3.common.C.TrackType
+import androidx.media3.common.util.UnstableApi
+
+/** Represents a set of interchangeable encoded versions of a media content component.  */
+@UnstableApi
+data class AdaptationSet(
+    /** The [TrackType] of the adaptation set.  */
+    val type: @TrackType Int,
+    /** [Representation]s in the adaptation set.  */
+    val representations: List<Representation?>
+)

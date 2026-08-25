@@ -1,0 +1,71 @@
+plugins {
+    id 'com.google.protobuf' version '0.9.5'
+}
+
+apply from: gradle.ext.sharedModulesConstants
+
+apply plugin: 'kotlin-android'
+apply plugin: 'com.android.library'
+
+android {
+    namespace 'app.votube.sabr'
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+
+    compileSdkVersion project.properties.compileSdkVersion
+
+    defaultConfig {
+        minSdkVersion 21
+        targetSdkVersion project.properties.targetSdkVersion
+        versionCode 1
+        versionName "1.0"
+
+        consumerProguardFiles 'proguard-rules.pro'
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+        }
+    }
+
+    lintOptions {
+        abortOnError false
+    }
+}
+
+// Media3 (androidx.media3): 1.4.1 is the last version compatible with compileSdk 34 / AGP 7.4.x
+def media3Version = '1.4.1'
+def protobufLiteVersion = '3.21.12'
+
+dependencies {
+    implementation 'org.jetbrains.kotlin:kotlin-stdlib:' + kotlinVersion
+    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:' + kotlinxVersion
+
+    api 'androidx.media3:media3-exoplayer:' + media3Version
+    api 'androidx.media3:media3-exoplayer-dash:' + media3Version
+    api 'androidx.media3:media3-datasource:' + media3Version
+    api 'androidx.media3:media3-common:' + media3Version
+
+    implementation 'com.squareup.okhttp3:okhttp:' + okhttpVersion
+    implementation 'com.google.protobuf:protobuf-javalite:' + protobufLiteVersion
+}
+
+protobuf {
+    protoc {
+        artifact = 'com.google.protobuf:protoc:3.21.12'
+    }
+
+    generateProtoTasks {
+        all().configureEach { task ->
+            task.builtins {
+                java {
+                    option 'lite'
+                }
+            }
+        }
+    }
+}
