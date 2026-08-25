@@ -62,22 +62,19 @@ android {
         // Trying to fix VerifyError/ClassNotFoundException
         multiDexKeepProguard file("multidex-keep.pro")
 
-        // The content of Universal apk
+        // Universal single APK: all ABIs (Fire TV, Pixel, WSL)
         ndk {
-            abiFilters 'armeabi-v7a', 'arm64-v8a'
+            abiFilters 'armeabi-v7a', 'arm64-v8a', 'x86'
         }
     }
 
-    // https://stackoverflow.com/questions/37382057/android-apk-how-to-exclude-a-so-file-from-a-3rd-party-dependency-using-gradle
-    // armeabi-v7a backward compatible with arm64-v8a, x86 -> x86_64 etc
+    // Single universal APK instead of per-ABI splits (vot requested)
     splits {
         abi {
-            enable true
+            enable false
             reset()
-            // Note, Android could soon start warning users when they run 32-bit apps
-            //include 'x86', 'x86_64', 'armeabi-v7a', 'arm64-v8a' //select ABIs to build APKs for
-            include 'armeabi-v7a', 'arm64-v8a', 'x86' // v7a main build, x86 for WSL, v8a for Pixel Tablet (no 32 bit support)
-            universalApk true //generate an additional APK that contains all the ABIs
+            include 'armeabi-v7a', 'arm64-v8a', 'x86'
+            universalApk false
         }
     }
 
