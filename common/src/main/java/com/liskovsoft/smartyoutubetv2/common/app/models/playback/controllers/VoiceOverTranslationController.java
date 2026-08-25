@@ -786,7 +786,7 @@ extends BasePlayerController {
      * Enabled aggressive exception aggregation
      */
     /* synthetic */ void lambda$runTranslateRequest$3(VotApiService object, Video object2, String string2, int n, VideoLoaderController videoLoaderController, String[] stringArray, Activity activity, String string3, int n2, boolean bl, boolean bl2, int n3) {
-        void var1_5;
+        Exception var1_5 = null;
         block6: {
             String string4;
             String string5;
@@ -797,7 +797,7 @@ extends BasePlayerController {
                 mediaItemFormatInfo = videoLoaderController.getLastFormatInfo();
             }
             catch (Exception exception) {
-                // empty catch block
+                var1_5 = exception;
                 break block6;
             }
             try {
@@ -815,7 +815,9 @@ extends BasePlayerController {
                 VoiceOverTranslationController.postToUiThread(activity, (Runnable)object2);
                 return;
             }
-            catch (Exception exception) {}
+            catch (Exception exception) {
+                var1_5 = exception;
+            }
         }
         VoiceOverTranslationController.postToUiThread(activity, new VoiceOverTranslationController$$ExternalSyntheticLambda2(this, n2, stringArray, (Exception)var1_5, bl, bl2));
     }
