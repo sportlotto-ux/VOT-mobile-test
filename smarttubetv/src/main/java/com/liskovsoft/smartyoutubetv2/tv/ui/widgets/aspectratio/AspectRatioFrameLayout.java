@@ -16,6 +16,7 @@
 package com.liskovsoft.smartyoutubetv2.tv.ui.widgets.aspectratio;
 
 import android.content.Context;
+import com.liskovsoft.smartyoutubetv2.tv.R;
 import android.content.res.TypedArray;
 import androidx.annotation.IntDef;
 import androidx.annotation.Nullable;
