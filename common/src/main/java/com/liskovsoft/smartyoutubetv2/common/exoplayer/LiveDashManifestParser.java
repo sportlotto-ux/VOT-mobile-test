@@ -7,6 +7,7 @@ import androidx.media3.exoplayer.dash.DashSegmentIndex;
 import androidx.media3.exoplayer.dash.manifest.AdaptationSet;
 import androidx.media3.exoplayer.dash.manifest.DashManifest;
 import androidx.media3.exoplayer.dash.manifest.DashManifestParser;
+import androidx.media3.exoplayer.dash.manifest.BaseUrl;
 import androidx.media3.exoplayer.dash.manifest.Descriptor;
 import androidx.media3.exoplayer.dash.manifest.Period;
 import androidx.media3.exoplayer.dash.manifest.RangedUri;
@@ -23,6 +24,7 @@ import com.liskovsoft.sharedutils.querystringparser.UrlQueryStringFactory;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 /**
@@ -319,7 +321,7 @@ public class LiveDashManifestParser extends DashManifestParser {
         private boolean mInitDone;
 
         public MultiSegmentRepresentationWrapper(MultiSegmentRepresentation origin, long segmentCount, long minUpdatePeriodMs) {
-            this(origin.revisionId, origin.format, origin.baseUrl, (SegmentList) Helpers.getField(origin, "segmentBase"), origin.inbandEventStreams);
+            this(origin.revisionId, origin.format, origin.baseUrls, (SegmentList) Helpers.getField(origin, "segmentBase"), origin.inbandEventStreams);
             mSegmentCount = segmentCount;
             mMinUpdatePeriodMs = minUpdatePeriodMs;
         }
@@ -327,10 +329,11 @@ public class LiveDashManifestParser extends DashManifestParser {
         public MultiSegmentRepresentationWrapper(
                 long revisionId,
                 Format format,
-                String baseUrl,
+                List<BaseUrl> baseUrls,
                 MultiSegmentBase segmentBase,
                 List<Descriptor> inbandEventStreams) {
-            super(revisionId, format, baseUrl, segmentBase, inbandEventStreams);
+            super(revisionId, format, baseUrls, segmentBase, inbandEventStreams,
+                    Collections.emptyList(), Collections.emptyList());
         }
 
         // DashSegmentIndex implementation.
@@ -366,7 +369,7 @@ public class LiveDashManifestParser extends DashManifestParser {
         }
 
         @Override
-        public int getSegmentCount(long periodDurationUs) {
+        public long getSegmentCount(long periodDurationUs) {
             init();
             return super.getSegmentCount(periodDurationUs);
         }

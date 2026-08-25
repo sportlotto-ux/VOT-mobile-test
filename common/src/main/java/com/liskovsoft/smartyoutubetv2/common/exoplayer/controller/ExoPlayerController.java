@@ -287,12 +287,7 @@ public class ExoPlayerController implements Player.Listener {
     public void setTrackSelector(DefaultTrackSelector trackSelector) {
         mTrackSelectorManager.setTrackSelector(trackSelector);
 
-        if (mContext != null && trackSelector != null && PlayerTweaksData.instance(mContext).isTunneledPlaybackEnabled()) {
-            // Enable tunneling if supported by the current media and device configuration.
-            if (VERSION.SDK_INT >= 21) {
-                trackSelector.setParameters(trackSelector.buildUponParameters().setTunnelingAudioSessionId(C.generateAudioSessionIdV21(mContext)));
-            }
-        }
+        // TODO(media3): tunneled playback tweak (setTunnelingAudioSessionId removed in media3)
     }
     
     public void setVideo(Video video) {
@@ -437,7 +432,7 @@ public class ExoPlayerController implements Player.Listener {
         Log.e(TAG, "onPositionDiscontinuity");
 
         // Fix video loop on 480p with legacy codes enabled
-        if (reason == Player.DISCONTINUITY_REASON_PERIOD_TRANSITION) {
+        if (reason == Player.DISCONTINUITY_REASON_AUTO_TRANSITION) {
             mPlayer.stop();
             mEventListener.onPlayEnd();
         }

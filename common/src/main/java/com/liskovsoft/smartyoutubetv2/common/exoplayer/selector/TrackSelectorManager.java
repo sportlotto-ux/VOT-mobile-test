@@ -6,7 +6,7 @@ import android.text.TextUtils;
 import android.util.Pair;
 
 import androidx.media3.common.Format;
-import androidx.media3.exoplayer.source.TrackGroup;
+import androidx.media3.common.TrackGroup;
 import androidx.media3.exoplayer.source.TrackGroupArray;
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector;
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector.Parameters;
@@ -21,7 +21,8 @@ import com.liskovsoft.smartyoutubetv2.common.exoplayer.selector.track.AudioTrack
 import com.liskovsoft.smartyoutubetv2.common.exoplayer.selector.track.MediaTrack;
 import com.liskovsoft.smartyoutubetv2.common.exoplayer.selector.track.VideoTrack;
 import androidx.media3.exoplayer.trackselection.RestoreTrackSelector;
-import com.liskovsoft.smartyoutubetv2.common.exoplayer.versions.selector.RestoreTrackSelector.TrackSelectorCallback;
+import androidx.media3.exoplayer.trackselection.RestoreTrackSelector.TrackSelectorCallback;
+
 import com.liskovsoft.smartyoutubetv2.common.prefs.PlayerData;
 import com.liskovsoft.smartyoutubetv2.common.prefs.PlayerTweaksData;
 import com.liskovsoft.smartyoutubetv2.common.utils.Utils;
@@ -357,8 +358,8 @@ public class TrackSelectorManager implements TrackSelectorCallback {
                 definition = new ExoTrackSelection.Definition(
                                 rendererTrackGroups.get(override.groupIndex),
                                 override.tracks,
-                                override.reason,
-                                override.data);
+                                override.trackSelectionReason,
+                                override.trackSelectionData);
             }
         }
 

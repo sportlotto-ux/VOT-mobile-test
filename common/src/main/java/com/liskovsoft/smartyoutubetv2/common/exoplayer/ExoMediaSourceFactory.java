@@ -2,6 +2,8 @@ package com.liskovsoft.smartyoutubetv2.common.exoplayer;
 
 import android.annotation.SuppressLint;
 import android.content.Context;
+
+import androidx.annotation.Nullable;
 import android.net.Uri;
 import android.text.TextUtils;
 import androidx.annotation.NonNull;
@@ -23,7 +25,9 @@ import androidx.media3.exoplayer.dash.DashMediaSource;
 import androidx.media3.exoplayer.dash.DefaultDashChunkSource;
 import androidx.media3.exoplayer.dash.manifest.DashManifest;
 import androidx.media3.exoplayer.dash.manifest.DashManifestParser;
+import com.liskovsoft.smartyoutubetv2.common.exoplayer.dashmanifest.DashManifestParser3;
 import androidx.media3.exoplayer.dash.manifest.Period;
+import androidx.media3.exoplayer.dash.manifest.ServiceDescriptionElement;
 import androidx.media3.exoplayer.dash.manifest.ProgramInformation;
 import androidx.media3.exoplayer.dash.manifest.UtcTimingElement;
 import androidx.media3.exoplayer.hls.HlsMediaSource;
@@ -163,8 +167,8 @@ public class ExoMediaSourceFactory {
                 }
                 return hlsSource;
             case C.TYPE_OTHER:
-                ProgressiveMediaSource extractorSource = new ProgressiveMediaSource.Factory(getMediaDataSourceFactory())
-                        .setExtractorsFactory(new DefaultExtractorsFactory())
+                ProgressiveMediaSource extractorSource = new ProgressiveMediaSource.Factory(
+                        getMediaDataSourceFactory(), new DefaultExtractorsFactory())
                         .createMediaSource(MediaItem.fromUri(uri));
                 if (mTrackErrorFixer != null) {
                     extractorSource.addEventListener(Utils.sHandler, mTrackErrorFixer);
@@ -229,7 +233,7 @@ public class ExoMediaSourceFactory {
     }
 
     private DashManifest getManifest(MediaItemFormatInfo formatInfo) {
-        DashManifestParser parser = new DashManifestParser();
+        DashManifestParser3 parser = new DashManifestParser3();
         return parser.parse(formatInfo);
     }
 
@@ -295,7 +299,7 @@ public class ExoMediaSourceFactory {
         return dataSourceFactory;
     }
 
-    private static void addCommonHeaders(HttpDataSource.BaseFactory dataSourceFactory) {
+    private static void addCommonHeaders(HttpDataSource.Factory dataSourceFactory) {
         // Doesn't work
         // Trying to fix 429 error (too many requests)
         //String authorization = RetrofitOkHttpHelper.getAuthHeaders().get("Authorization");
@@ -371,9 +375,10 @@ public class ExoMediaSourceFactory {
                 long timeShiftBufferDepthMs,
                 long suggestedPresentationDelayMs,
                 long publishTimeMs,
-                ProgramInformation programInformation,
-                UtcTimingElement utcTiming,
-                Uri location,
+                @Nullable ProgramInformation programInformation,
+                @Nullable UtcTimingElement utcTiming,
+                @Nullable ServiceDescriptionElement serviceDescription,
+                @Nullable Uri location,
                 List<Period> periods) {
             return new DashManifest(
                     availabilityStartTime,
@@ -386,6 +391,7 @@ public class ExoMediaSourceFactory {
                     publishTimeMs,
                     programInformation,
                     utcTiming,
+                    serviceDescription,
                     location,
                     periods);
         }

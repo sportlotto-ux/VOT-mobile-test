@@ -7,7 +7,6 @@ import androidx.annotation.Nullable;
 import androidx.media3.common.C;
 import androidx.media3.exoplayer.DefaultLoadControl;
 import androidx.media3.exoplayer.DefaultRenderersFactory;
-import androidx.media3.exoplayer.ExoPlayerFactory;
 import androidx.media3.exoplayer.SeekParameters;
 import androidx.media3.exoplayer.ExoPlayer;
 import androidx.media3.common.AudioAttributes;
@@ -151,7 +150,7 @@ public class ExoPlayerInitializer {
         float volume = mPlayerTweaksData.isPlayerAutoVolumeEnabled() ? mPlayerData.getPlayerVolume() * 2.0f : mPlayerData.getPlayerVolume();
         if (volume > 1f && Build.VERSION.SDK_INT >= 19) {
             mVolumeBooster = new VolumeBooster(true, volume, player);
-            player.addAudioListener(mVolumeBooster);
+            player.addAnalyticsListener(mVolumeBooster);
         }
         mVolumeBoost = Math.max(volume, 1f);
     }
@@ -193,7 +192,7 @@ public class ExoPlayerInitializer {
         }
 
         if (mPlayer != null && mVolumeBooster != null) {
-            mPlayer.removeAudioListener(mVolumeBooster);
+            mPlayer.removeAnalyticsListener(mVolumeBooster);
         }
 
         mVolumeBooster = null;

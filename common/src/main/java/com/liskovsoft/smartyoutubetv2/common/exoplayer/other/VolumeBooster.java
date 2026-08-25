@@ -6,10 +6,10 @@ import android.os.Build.VERSION;
 import androidx.annotation.Nullable;
 
 import androidx.media3.exoplayer.ExoPlayer;
-import androidx.media3.exoplayer.audio.AudioListener;
+import androidx.media3.exoplayer.analytics.AnalyticsListener;
 import com.liskovsoft.sharedutils.mylogger.Log;
 
-public class VolumeBooster implements AudioListener {
+public class VolumeBooster implements AnalyticsListener {
     private static final String TAG = VolumeBooster.class.getSimpleName();
     private boolean mIsEnabled;
     private final float mVolume;
@@ -25,7 +25,7 @@ public class VolumeBooster implements AudioListener {
     }
 
     @Override
-    public void onAudioSessionId(int audioSessionId) {
+    public void onAudioSessionIdChanged(EventTime eventTime, int audioSessionId) {
         if (VERSION.SDK_INT < 19 || mVolume <= 1) {
             return;
         }

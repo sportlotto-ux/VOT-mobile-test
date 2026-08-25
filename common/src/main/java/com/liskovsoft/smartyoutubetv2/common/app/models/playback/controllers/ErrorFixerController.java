@@ -192,7 +192,7 @@ public class ErrorFixerController extends BasePlayerController implements OnLong
         } else if (type == PlayerEventListener.ERROR_TYPE_RENDERER && rendererIndex == PlayerEventListener.RENDERER_INDEX_AUDIO) {
             getPlayerData().setFormat(FormatItem.AUDIO_HQ_MP4A);
             restartEngine = false;
-        } else if (type == PlayerEventListener.ERROR_TYPE_UNEXPECTED) {
+        } else if (type == PlayerEventListener.TYPE_UNEXPECTED) {
             // IllegalStateException: Buffer too small (5242880 < 7208383)
             if (Helpers.startsWithAny(errorContent, "Buffer too small", "Invalid to call at Released state; only valid in executing state")) {
                 lowerVideoQuality();
@@ -255,7 +255,7 @@ public class ErrorFixerController extends BasePlayerController implements OnLong
                 }
                 errorTitle = getContext().getString(msgResId);
                 break;
-            case PlayerEventListener.ERROR_TYPE_UNEXPECTED:
+            case PlayerEventListener.TYPE_UNEXPECTED:
                 errorTitle = getContext().getString(R.string.player_unexpected_error);
                 break;
             default:

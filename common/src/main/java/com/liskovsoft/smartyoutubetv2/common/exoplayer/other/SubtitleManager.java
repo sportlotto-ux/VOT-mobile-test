@@ -70,7 +70,9 @@ public class SubtitleManager implements TextOutput, OnDataChange {
     }
 
     @Override
-    public void onCues(List<Cue> cues) {
+    public void onCues(CueGroup cueGroup) {
+        List<Cue> cues = cueGroup.cues;
+    
         if (mSubtitleView != null) {
             mSubtitleView.setCues(forceCenterAlignment(cues));
         }
@@ -114,13 +116,13 @@ public class SubtitleManager implements TextOutput, OnDataChange {
                     text = textStr;
                 }
 
-                result.add(new Cue(text)); // sub centered by default
+                result.add(new Cue.Builder().setText(text).build()); // sub centered by default
 
                 String[] split = textStr.split("\n");
                 subsBuffer = split.length == 2 ? split[1] : textStr;
             } else {
                 CharSequence text = subsBuffer != null ? textStr.replace(subsBuffer, "") : textStr;
-                result.add(new Cue(text)); // sub centered by default
+                result.add(new Cue.Builder().setText(text).build()); // sub centered by default
                 subsBuffer = text;
             }
         }
