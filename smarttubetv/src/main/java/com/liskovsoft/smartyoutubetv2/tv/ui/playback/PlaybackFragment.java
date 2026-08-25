@@ -501,8 +501,8 @@ public class PlaybackFragment extends SeekModePlaybackFragment implements Playba
             mSubtitleManager = new SubtitleManager(getView().findViewById(R.id.leanback_subtitles));
 
             // subs renderer
-            if (mPlayer.getTextComponent() != null) {
-                mPlayer.getTextComponent().addTextOutput(mSubtitleManager);
+            if (mPlayer instanceof androidx.media3.common.text.TextComponent) {
+                ((androidx.media3.common.text.TextComponent) mPlayer).addTextOutput(mSubtitleManager);
             }
         }
     }
@@ -574,9 +574,8 @@ public class PlaybackFragment extends SeekModePlaybackFragment implements Playba
 
             @Override
             public Boolean shouldForward(@NonNull Player player, @NonNull DoubleTapPlayerView playerView, float posX) {
-                if (player.getPlaybackState() == PlaybackState.STATE_ERROR ||
-                        player.getPlaybackState() == PlaybackState.STATE_NONE ||
-                        player.getPlaybackState() == PlaybackState.STATE_STOPPED) {
+                if (player.getPlaybackState() != Player.STATE_READY &&
+                        player.getPlaybackState() != Player.STATE_BUFFERING) {
 
                     playerView.cancelInDoubleTapMode();
                     return false;

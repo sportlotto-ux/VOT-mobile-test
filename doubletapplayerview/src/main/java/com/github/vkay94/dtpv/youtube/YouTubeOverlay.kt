@@ -1,7 +1,6 @@
 package com.github.vkay94.dtpv.youtube
 
 import android.content.Context
-import android.media.session.PlaybackState
 import android.util.AttributeSet
 import android.view.LayoutInflater
 import android.view.View
@@ -17,8 +16,8 @@ import com.github.vkay94.dtpv.R
 import com.github.vkay94.dtpv.SeekListener
 import com.github.vkay94.dtpv.youtube.views.CircleClipTapView
 import com.github.vkay94.dtpv.youtube.views.SecondsView
-import com.google.android.exoplayer2.Player
-import com.google.android.exoplayer2.ui.PlayerView
+import androidx.media3.common.Player
+import androidx.media3.ui.PlayerView
 import androidx.core.content.withStyledAttributes
 
 
@@ -498,9 +497,8 @@ class YouTubeOverlay(context: Context, private val attrs: AttributeSet?) :
          */
         fun shouldForward(player: Player, playerView: DoubleTapPlayerView, posX: Float): Boolean? {
 
-            if (player.playbackState == PlaybackState.STATE_ERROR ||
-                player.playbackState == PlaybackState.STATE_NONE ||
-                player.playbackState == PlaybackState.STATE_STOPPED) {
+            if (player.playbackState != Player.STATE_READY &&
+                player.playbackState != Player.STATE_BUFFERING) {
 
                 playerView.cancelInDoubleTapMode()
                 return null

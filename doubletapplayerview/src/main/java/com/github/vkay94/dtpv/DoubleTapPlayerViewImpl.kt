@@ -10,7 +10,7 @@ import android.view.GestureDetector
 import android.view.MotionEvent
 import android.view.View
 import androidx.core.view.GestureDetectorCompat
-import com.google.android.exoplayer2.ui.PlayerView
+import androidx.media3.ui.PlayerView
 import androidx.core.content.withStyledAttributes
 
 /**
@@ -48,7 +48,7 @@ open class DoubleTapPlayerViewImpl @JvmOverloads constructor(
 
     /**
      * If this field is set to `true` this view will handle double tapping, otherwise it will
-     * handle touches the same way as the original [PlayerView][com.google.android.exoplayer2.ui.PlayerView] does
+     * handle touches the same way as the original [PlayerView][androidx.media3.ui.PlayerView] does
      */
     override var isDoubleTapEnabled = true
 

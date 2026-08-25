@@ -1,6 +1,6 @@
 package com.github.vkay94.dtpv
 
-import com.google.android.exoplayer2.ui.PlayerView
+import androidx.media3.ui.PlayerView
 
 interface DoubleTapPlayerView {
     /**
@@ -9,7 +9,7 @@ interface DoubleTapPlayerView {
     val playerWidth: Int
     /**
      * If this field is set to `true` this view will handle double tapping, otherwise it will
-     * handle touches the same way as the original [PlayerView][com.google.android.exoplayer2.ui.PlayerView] does
+     * handle touches the same way as the original [PlayerView][androidx.media3.ui.PlayerView] does
      */
     var isDoubleTapEnabled: Boolean
     /**
