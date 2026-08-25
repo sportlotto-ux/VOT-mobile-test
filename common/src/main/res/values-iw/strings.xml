@@ -382,7 +382,7 @@ So, make a copy of values-he and name it values-iw. Keep both in your structure.
     <string name="proxy_test_aborted">הבדיקה בוטלה, נא לתקן הגדרות פרוקסי קודם.</string>
     <string name="proxy_application_aborted">נא לתקן הגדרות פרוקסי קודם.</string>
     <string name="proxy_test_start">בדיקה #%d: %s …</string>
-    <string name="proxy_test_error">שגיאה #%d: %s</string>
+    <string name="proxy_test_error" formatted="false">שגיאה #%d: %s</string>
     <string name="proxy_test_status">מצב #%d: %s %d %s</string>
     <string name="openvpn_config_address_hint">כתובת קובץ התצורה (*.ovpn)</string>
     <string name="enable_openvpn">שימוש ב-OpenVPN</string>

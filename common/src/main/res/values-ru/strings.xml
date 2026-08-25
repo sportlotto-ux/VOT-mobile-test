@@ -375,7 +375,7 @@
     <string name="proxy_test_aborted">Тест прерван, сначала исправьте настройки прокси.</string>
     <string name="proxy_application_aborted">Пожалуйста, сначала исправьте настройки прокси.</string>
     <string name="proxy_test_start">Тест#%d: %s…</string>
-    <string name="proxy_test_error">Ошибка#%d: %s</string>
+    <string name="proxy_test_error" formatted="false">Ошибка#%d: %s</string>
     <string name="proxy_test_status">Статус#%d: %s %d %s</string>
     <string name="openvpn_config_address_hint">Адрес файла конфигурации (*.ovpn)</string>
     <string name="enable_openvpn">Использовать OpenVPN</string>

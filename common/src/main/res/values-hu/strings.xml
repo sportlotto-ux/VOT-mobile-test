@@ -347,7 +347,7 @@
   <string name="proxy_test_aborted">A teszt megszakadt, először javítsa ki a proxy beállításait.</string>
   <string name="proxy_application_aborted">Kérjük, először javítsa ki a proxy beállításait.</string>
   <string name="proxy_test_start">Teszt#%d: %s …</string>
-  <string name="proxy_test_error">Hiba#%d: %s …</string>
+  <string name="proxy_test_error" formatted="false">Hiba#%d: %s …</string>
   <string name="proxy_test_status">Státusz#%d: %s %d %s</string>
   <string name="openvpn_config_address_hint">Konfigurációs fájl címe (*.ovpn)</string>
   <string name="enable_openvpn">OpenVPN használata</string>

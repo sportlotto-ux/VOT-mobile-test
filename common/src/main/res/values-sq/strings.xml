@@ -369,7 +369,7 @@
   <string name="proxy_test_aborted">Prova u ndërpre, të lutem së pari rregullo cilësimet e ndërmjetësit.</string>
   <string name="proxy_application_aborted">Të lutem, së pari rregullo cilësimet e ndërmjetësit tënd.</string>
   <string name="proxy_test_start">Prova #%d: %s …</string>
-  <string name="proxy_test_error">Gabimi #%d: %s</string>
+  <string name="proxy_test_error" formatted="false">Gabimi #%d: %s</string>
   <string name="proxy_test_status">Gjendja #%d: %s %d %s</string>
   <string name="openvpn_config_address_hint">Adresa e skedarit të konfigurimit(*.ovpn)</string>
   <string name="enable_openvpn">Përdor OpenVPN</string>

@@ -356,7 +356,7 @@
   <string name="proxy_test_aborted">Test interrompu, veuillez d\'abord corriger les paramètres du proxy.</string>
   <string name="proxy_application_aborted">Veuillez d\'abord corriger les paramètres du proxy.</string>
   <string name="proxy_test_start">Test#%d : %s …</string>
-  <string name="proxy_test_error">Erreur#%d : %s</string>
+  <string name="proxy_test_error" formatted="false">Erreur#%d : %s</string>
   <string name="proxy_test_status">Statut#%d : %s %d %s</string>
   <string name="openvpn_config_address_hint">Adresse du fichier de configuration (*.ovpn)</string>
   <string name="enable_openvpn">Utiliser OpenVPN</string>

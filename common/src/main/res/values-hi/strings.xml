@@ -346,7 +346,7 @@
   <string name="proxy_test_aborted">परीक्षण रद्द किया गया, कृपया पहले प्रॉक्सी सेटिंग ठीक करें</string>
   <string name="proxy_application_aborted">कृपया पहले प्रॉक्सी सेटिंग ठीक करें</string>
   <string name="proxy_test_start">टेस्ट#%d: %s …</string>
-  <string name="proxy_test_error">त्रुटि#%d: %s</string>
+  <string name="proxy_test_error" formatted="false">त्रुटि#%d: %s</string>
   <string name="proxy_test_status">स्थिति#%d: %s %d %s</string>
   <string name="openvpn_config_address_hint">कॉन्फ़िग फ़ाइल पता (*.ovpn)</string>
   <string name="enable_openvpn">OpenVPN का प्रयोग करें</string>

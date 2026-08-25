@@ -443,7 +443,7 @@
     <string name="proxy_test_aborted">Тест прекинут. Прво поправите поставке проксија.</string>
     <string name="proxy_application_aborted">Исправите поставке проксија.</string>
     <string name="proxy_test_start">Тест#%d: %s …</string>
-    <string name="proxy_test_error">Грешка#%d: %s</string>
+    <string name="proxy_test_error" formatted="false">Грешка#%d: %s</string>
     <string name="proxy_test_status">Статус#%d: %s %d %s</string>
     <string name="openvpn_config_address_hint">Адреса за фајл подешавања (*.ovpn)</string>
     <string name="enable_openvpn">Користи ОпенВПН</string>

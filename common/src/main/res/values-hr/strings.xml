@@ -347,7 +347,7 @@
     <string name="proxy_test_aborted">Testiranje prekinuto, prvo ispravite proxy postavke.</string>
     <string name="proxy_application_aborted">Prvo ispravite proxy postavke.</string>
     <string name="proxy_test_start">Test#%d: %s …</string>
-    <string name="proxy_test_error">Greška#%d: %s</string>
+    <string name="proxy_test_error" formatted="false">Greška#%d: %s</string>
     <string name="proxy_test_status">Stanje#%d: %s %d %s</string>
     <string name="openvpn_config_address_hint">Adresa datoteke podešavanja (*.ovpn)</string>
     <string name="enable_openvpn">Koristi OpenVPN</string>

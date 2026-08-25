@@ -378,7 +378,7 @@
   <string name="proxy_test_aborted">Testet avbröts. Korrigera proxyinställningarna först.</string>
   <string name="proxy_application_aborted">Korrigera proxyinställningarna först.</string>
   <string name="proxy_test_start">Test nr %d: %s …</string>
-  <string name="proxy_test_error">Fel nr %d: %s</string>
+  <string name="proxy_test_error" formatted="false">Fel nr %d: %s</string>
   <string name="proxy_test_status">Status nr %d: %s %d %s</string>
   <string name="openvpn_config_address_hint">Konfigurationsfilens adress (*.ovpn)</string>
   <string name="enable_openvpn">Använd OpenVPN</string>

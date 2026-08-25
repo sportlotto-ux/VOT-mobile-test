@@ -369,7 +369,7 @@
   <string name="proxy_test_aborted">Test abandonat, vă rugăm să remediați mai întâi setările proxy.</string>
   <string name="proxy_application_aborted">Vă rugăm să corectați mai întâi setările proxy.</string>
   <string name="proxy_test_start">Test #%d: %s ...</string>
-  <string name="proxy_test_error">Eroare #%d: %s</string>
+  <string name="proxy_test_error" formatted="false">Eroare #%d: %s</string>
   <string name="proxy_test_status">Stare #%d: %s %d %s</string>
   <string name="openvpn_config_address_hint">Adresa fișierului Configurații (*.ovpn)</string>
   <string name="enable_openvpn">Utilizați OpenVPN</string>

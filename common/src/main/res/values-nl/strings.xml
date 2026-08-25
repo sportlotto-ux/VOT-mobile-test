@@ -372,7 +372,7 @@
   <string name="proxy_test_aborted">Test afgebroken, repareer eerst de proxy-instellingen.</string>
   <string name="proxy_application_aborted">Corrigeer eerst de proxy-instellingen.</string>
   <string name="proxy_test_start">Test#%d: %s …</string>
-  <string name="proxy_test_error">Error#%d: %s</string>
+  <string name="proxy_test_error" formatted="false">Error#%d: %s</string>
   <string name="proxy_test_status">Status#%d: %s %d %s</string>
   <string name="openvpn_config_address_hint">Adres configuratiebestand (*.ovpn)</string>
   <string name="enable_openvpn">Gebruik OpenVPN</string>

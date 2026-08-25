@@ -359,7 +359,7 @@
   <string name="proxy_test_aborted">Тестът е прекъснат, моля, първо коригирайте настройките на прокси сървъра.</string>
   <string name="proxy_application_aborted">Моля, първо коригирайте настройките на прокси сървъра.</string>
   <string name="proxy_test_start">Тест#%d: %s ...</string>
-  <string name="proxy_test_error">Грешка#%d: %s</string>
+  <string name="proxy_test_error" formatted="false">Грешка#%d: %s</string>
   <string name="proxy_test_status">Статус#%d: %s %d %s</string>
   <string name="openvpn_config_address_hint">Адрес на файла за конфигуриране (*.ovpn)</string>
   <string name="enable_openvpn">Използване на OpenVPN</string>

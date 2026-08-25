@@ -346,7 +346,7 @@
   <string name="proxy_test_aborted">已中止測試，請先修正 Proxy 設定。</string>
   <string name="proxy_application_aborted">請先更正 Proxy 設定。</string>
   <string name="proxy_test_start">測試 #%d：%s…</string>
-  <string name="proxy_test_error">錯誤 #%d：%s</string>
+  <string name="proxy_test_error" formatted="false">錯誤 #%d：%s</string>
   <string name="proxy_test_status">結果 #%d：%s %d %s</string>
   <string name="openvpn_config_address_hint">設定檔位置（*.ovpn）</string>
   <string name="enable_openvpn">使用 OpenVPN</string>

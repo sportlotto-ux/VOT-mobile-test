@@ -395,7 +395,7 @@
   <string name="proxy_test_aborted">Test afbrudt. Ret venligst proxyindstillinger først.</string>
   <string name="proxy_application_aborted">Ret venligst proxyindstillinger først.</string>
   <string name="proxy_test_start">Test #%d: %s …</string>
-  <string name="proxy_test_error">Fejl #%d: %s</string>
+  <string name="proxy_test_error" formatted="false">Fejl #%d: %s</string>
   <string name="proxy_test_status">Status #%d: %s %d %s</string>
   <string name="openvpn_config_address_hint">Konfigurationsfil (*.ovpn)</string>
   <string name="enable_openvpn">Brug OpenVPN</string>

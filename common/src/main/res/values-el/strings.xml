@@ -341,7 +341,7 @@
   <string name="proxy_test_aborted">Η δοκιμή ακυρώθηκε, παρακαλώ διορθώσετε τις ρυθμίσεις proxy πρώτα.</string>
   <string name="proxy_application_aborted">Παρακαλώ, διορθώσετε τις ρυθμίσεις proxy πρώτα.</string>
   <string name="proxy_test_start">Δοκιμή#%d: %s...</string>
-  <string name="proxy_test_error">Σφάλμα#%d: %s</string>
+  <string name="proxy_test_error" formatted="false">Σφάλμα#%d: %s</string>
   <string name="proxy_test_status">Κατάσταση#%d %s %d %s</string>
   <string name="openvpn_config_address_hint">Διαμόρφωση διεύθυνσης αρχείου (*.ovpn)</string>
   <string name="enable_openvpn">Χρήση OpenVPN</string>
