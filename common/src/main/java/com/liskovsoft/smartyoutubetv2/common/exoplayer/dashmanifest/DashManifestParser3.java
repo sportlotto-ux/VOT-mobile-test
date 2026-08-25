@@ -487,8 +487,7 @@ public class DashManifestParser3 {
                 representationInfo.revisionId,
                 format,
                 Collections.singletonList(new BaseUrl(representationInfo.baseUrl)),
-                representationInfo.segmentBase,
-                new ArrayList<>());
+                representationInfo.segmentBase);
     }
 
     protected Format buildFormat(

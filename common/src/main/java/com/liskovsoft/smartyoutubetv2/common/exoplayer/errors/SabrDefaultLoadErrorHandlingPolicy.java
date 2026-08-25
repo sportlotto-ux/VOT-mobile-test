@@ -6,12 +6,12 @@ import java.io.IOException;
 
 public class SabrDefaultLoadErrorHandlingPolicy extends DashDefaultLoadErrorHandlingPolicy {
     @Override
-    public long getBlacklistDurationMsFor(int dataType, long loadDurationMs, IOException exception, int errorCount) {
+    public long getBlacklistDurationMsFor(LoadErrorInfo loadErrorInfo) {
         return super.getBlacklistDurationMsFor(dataType, loadDurationMs, exception, errorCount);
     }
     
     @Override
-    public long getRetryDelayMsFor(int dataType, long loadDurationMs, IOException exception, int errorCount) {
+    public long getRetryDelayMsFor(LoadErrorInfo loadErrorInfo) {
         if (Helpers.contains(exception.getMessage(), "Wait 5 sec")) {
             return 5_000;
         }

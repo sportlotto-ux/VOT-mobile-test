@@ -26,8 +26,8 @@ public class RestoreTrackSelector extends DefaultTrackSelector {
         void updateSubtitleTrackSelection(TrackGroupArray groups, Parameters params, ExoTrackSelection.Definition definition);
     }
 
-    public RestoreTrackSelector(ExoTrackSelection.Factory trackSelectionFactory) {
-        super(trackSelectionFactory);
+    public RestoreTrackSelector(Context context, ExoTrackSelection.Factory trackSelectionFactory) {
+        super(context, trackSelectionFactory);
     }
 
     public void setOnTrackSelectCallback(@Nullable TrackSelectorCallback callback) {

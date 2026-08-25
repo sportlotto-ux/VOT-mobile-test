@@ -433,12 +433,10 @@ public class ExoPlayerController implements Player.Listener {
         if (reason == Player.DISCONTINUITY_REASON_AUTO_TRANSITION) {
             mPlayer.stop();
             mEventListener.onPlayEnd();
+        } else if (reason == Player.DISCONTINUITY_REASON_SEEK) {
+            // Replaces deprecated onSeekProcessed
+            mEventListener.onSeekEnd();
         }
-    }
-
-    @Override
-    public void onSeekProcessed() {
-        mEventListener.onSeekEnd();
     }
 
     public float getSpeed() {
