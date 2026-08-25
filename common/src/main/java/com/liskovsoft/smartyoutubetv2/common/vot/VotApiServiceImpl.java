@@ -627,14 +627,14 @@ public class VotApiServiceImpl implements VotApiService
         jsonObject2.put("sec-ch-ua-full-version-list", (Object)buildSecChUaFull());
         jsonObject2.put("Sec-Fetch-Mode", (Object)"no-cors");
         jsonObject.put("headers", (Object)jsonObject2);
-        Object null;
+        Object bodyVal;
         if (bytes != null) {
-            null = new String(bytes, StandardCharsets.UTF_8);
+            bodyVal = new String(bytes, StandardCharsets.UTF_8);
         }
         else {
-            null = JSONObject.NULL;
+            bodyVal = JSONObject.NULL;
         }
-        jsonObject.put("body", null);
+        jsonObject.put("body", bodyVal);
         final RequestBody create = RequestBody.create(VotApiServiceImpl.JSON_MEDIA_TYPE, jsonObject.toString().getBytes(StandardCharsets.UTF_8));
         final Request.Builder builder = new Request.Builder();
         final StringBuilder sb = new StringBuilder();
