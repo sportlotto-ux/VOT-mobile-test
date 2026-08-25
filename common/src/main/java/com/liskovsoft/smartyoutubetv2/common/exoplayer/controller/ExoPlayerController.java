@@ -3,8 +3,6 @@ package com.liskovsoft.smartyoutubetv2.common.exoplayer.controller;
 import android.content.Context;
 import android.os.Build;
 import android.os.Build.VERSION;
-import android.os.Handler;
-import android.os.Looper;
 
 import com.google.android.exoplayer2.C;
 import com.google.android.exoplayer2.ExoPlaybackException;
@@ -59,10 +57,6 @@ public class ExoPlayerController implements Player.EventListener {
     private com.google.android.exoplayer2.SimpleExoPlayer mTranslationPlayer;
     private boolean mTranslationOverlayActive;
     private float mLastUserVolume = 1.0f;
-    private final Handler mSyncHandler = new Handler(Looper.getMainLooper());
-    private final Runnable mSyncRunnable = this::checkDriftAndSync;
-    private static final long SYNC_INTERVAL_MS = 3000;
-    private static final long DRIFT_THRESHOLD_MS = 1500;
 
     public ExoPlayerController(Context context, PlayerEventListener eventListener) {
         PlayerTweaksData playerTweaksData = PlayerTweaksData.instance(context);
@@ -170,14 +164,10 @@ public class ExoPlayerController implements Player.EventListener {
             mTranslationPlayer.prepare(audioSource);
             mTranslationPlayer.seekTo(Math.max(0, pos));
             try { mTranslationPlayer.setPlaybackParameters(mPlayer.getPlaybackParameters()); } catch (Exception e) {}
-            // initial sync like vot.js: do NOT add extra listener - rely on main player events only (playing/seeked)
-            // vot only listens to video events, not audio - extra trans listener caused re-seek loop and +10с лаг
+            // vot.js: только события видео, без периодики - lipSync сам правит
             if (isVideoPlaying()) {
                 mTranslationPlayer.setPlayWhenReady(true);
-                android.util.Log.e("VOT_SYNC", "attach playing vPos=" + pos + " transPos=" + mTranslationPlayer.getCurrentPosition());
-                // сверка времени каждые 3с, мягко правит если >1.5с
-                mSyncHandler.removeCallbacks(mSyncRunnable);
-                mSyncHandler.postDelayed(mSyncRunnable, SYNC_INTERVAL_MS);
+                android.util.Log.e("VOT_SYNC", "attach playing vPos=" + pos);
             } else if (!mPlayer.getPlayWhenReady()) {
                 mTranslationPlayer.setPlayWhenReady(false);
                 android.util.Log.e("VOT_SYNC", "attach paused vPos=" + pos);
@@ -185,19 +175,9 @@ public class ExoPlayerController implements Player.EventListener {
                 mTranslationPlayer.setPlayWhenReady(false);
                 android.util.Log.e("VOT_SYNC", "attach waiting vPos=" + pos);
             }
-            // verification log через 2с
-            mSyncHandler.postDelayed(() -> {
-                if (mTranslationPlayer != null && mTranslationOverlayActive && mPlayer != null) {
-                    long v = mPlayer.getCurrentPosition();
-                    long a = mTranslationPlayer.getCurrentPosition();
-                    long diff = v - a;
-                    android.util.Log.e("VOT_SYNC", "VERIFY v=" + v + " a=" + a + " diff(v-a)=" + diff + " ms ~ " + (diff/1000f) + "s");
-                }
-            }, 2000);
         } catch (Exception e) { android.util.Log.e("VOT_VOL", "attach failed", e); releaseTranslationAudioPlayer(); }
     }
     private void releaseTranslationAudioPlayer() {
-        mSyncHandler.removeCallbacks(mSyncRunnable);
         if (mTranslationPlayer != null) {
             try { mTranslationPlayer.stop(true); mTranslationPlayer.release(); } catch (Exception e) {}
             mTranslationPlayer = null;
@@ -209,30 +189,6 @@ public class ExoPlayerController implements Player.EventListener {
     }
     private boolean isVideoPlaying() {
         return ExoUtils.isPlaying(mPlayer);
-    }
-    private void checkDriftAndSync() {
-        // сверка времени оригинал vs яндекс перевод - периодическая как timeupdate в vot.js, но с логом
-        if (mTranslationPlayer == null || !mTranslationOverlayActive || mPlayer == null) return;
-        try {
-            long vPos = mPlayer.getCurrentPosition();
-            long aPos = mTranslationPlayer.getCurrentPosition();
-            long diff = vPos - aPos; // + отстает, - опережает
-            android.util.Log.e("VOT_SYNC", "VERIFY drift v=" + vPos + " a=" + aPos + " diff=" + diff + " ms");
-            if (Math.abs(diff) > DRIFT_THRESHOLD_MS) {
-                android.util.Log.e("VOT_SYNC", "drift correct v=" + vPos + " a=" + aPos + " diff=" + diff);
-                mTranslationPlayer.seekTo(vPos);
-            }
-            PlaybackParameters vp = mPlayer.getPlaybackParameters();
-            PlaybackParameters ap = mTranslationPlayer.getPlaybackParameters();
-            if (vp != null && ap != null && vp.speed != ap.speed) {
-                mTranslationPlayer.setPlaybackParameters(vp);
-            }
-            // планируем следующую сверку пока играет
-            if (isVideoPlaying()) {
-                mSyncHandler.removeCallbacks(mSyncRunnable);
-                mSyncHandler.postDelayed(mSyncRunnable, SYNC_INTERVAL_MS);
-            }
-        } catch (Exception e) { android.util.Log.e("VOT_SYNC", "drift check fail", e); }
     }
     // Mirrors vot.user.js chaimu/BasePlayer lipSync: sync currentTime+playbackRate + play/pause by mode
     //vot делает audio.currentTime=video.currentTime на каждом событии, мы так же, но без агрессивного periodic seek
