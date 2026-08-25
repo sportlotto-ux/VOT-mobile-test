@@ -37,6 +37,7 @@ import com.github.vkay94.dtpv.youtube.YouTubeOverlay;
 import com.github.vkay94.dtpv.youtube.YouTubeOverlay.PerformListener;
 import androidx.media3.exoplayer.DefaultRenderersFactory;
 import androidx.media3.common.Player;
+import androidx.media3.common.text.CueGroup;
 import androidx.media3.exoplayer.ExoPlayer;
 import androidx.media3.ui.leanback.LeanbackPlayerAdapter;
 import androidx.media3.exoplayer.trackselection.AdaptiveTrackSelection;
@@ -502,7 +503,13 @@ public class PlaybackFragment extends SeekModePlaybackFragment implements Playba
 
             // subs renderer
             if (mPlayer instanceof ExoPlayer.TextComponent) {
-                ((ExoPlayer.TextComponent) mPlayer).addTextOutput(mSubtitleManager);
+                // media3: text events are delivered via Player.Listener#onCues
+                mPlayer.addListener(new Player.Listener() {
+                    @Override
+                    public void onCues(CueGroup cueGroup) {
+                        mSubtitleManager.onCues(cueGroup);
+                    }
+                });
             }
         }
     }
