@@ -501,8 +501,8 @@ public class PlaybackFragment extends SeekModePlaybackFragment implements Playba
             mSubtitleManager = new SubtitleManager(getView().findViewById(R.id.leanback_subtitles));
 
             // subs renderer
-            if (mPlayer instanceof androidx.media3.common.text.TextComponent) {
-                ((androidx.media3.common.text.TextComponent) mPlayer).addTextOutput(mSubtitleManager);
+            if (mPlayer instanceof ExoPlayer.TextComponent) {
+                ((ExoPlayer.TextComponent) mPlayer).addTextOutput(mSubtitleManager);
             }
         }
     }
