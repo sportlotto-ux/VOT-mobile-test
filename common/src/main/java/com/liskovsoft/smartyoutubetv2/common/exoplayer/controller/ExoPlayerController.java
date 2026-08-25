@@ -94,7 +94,7 @@ public class ExoPlayerController implements Player.EventListener {
                             try {
                                 MediaSource videoSource = mMediaSourceFactory.fromSabrFormatInfo(formatInfo);
                                 MediaSource votSource = mMediaSourceFactory.fromUrlList(java.util.Collections.singletonList(votUrl));
-                                MediaSource merged = new MergingMediaSource(true, true, videoSource, votSource);
+                                MediaSource merged = new MergingMediaSource(videoSource, votSource);
                                 openMediaSource(merged);
                                 Log.d(TAG, "VOT merged: " + votUrl);
                             } catch (Exception e) {
