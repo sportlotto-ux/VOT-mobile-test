@@ -38,7 +38,7 @@ import com.github.vkay94.dtpv.youtube.YouTubeOverlay.PerformListener;
 import androidx.media3.exoplayer.DefaultRenderersFactory;
 import androidx.media3.exoplayer.Player;
 import androidx.media3.exoplayer.ExoPlayer;
-import androidx.media3.exoplayer.leanback.LeanbackPlayerAdapter;
+import androidx.media3.ui.leanback.LeanbackPlayerAdapter;
 import androidx.media3.exoplayer.trackselection.AdaptiveTrackSelection;
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector;
 import androidx.media3.common.util.Util;

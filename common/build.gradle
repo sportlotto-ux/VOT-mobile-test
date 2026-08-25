@@ -81,7 +81,7 @@ dependencies {
     api 'androidx.media3:media3-datasource:' + media3Version
     api 'androidx.media3:media3-datasource-okhttp:' + media3Version
     api 'androidx.media3:media3-datasource-cronet:' + media3Version
-    api 'androidx.media3:media3-exoplayer-leanback:' + media3Version
+    api 'androidx.media3:media3-ui-leanback:' + media3Version
     implementation project(':sabr-media3')
 
     // implementation 'com.amazon.android:exoplayer:' + amazonExoplayerVersion
