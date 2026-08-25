@@ -358,8 +358,7 @@ public class TrackSelectorManager implements TrackSelectorCallback {
                 definition = new ExoTrackSelection.Definition(
                                 rendererTrackGroups.get(override.groupIndex),
                                 override.tracks,
-                                override.trackSelectionReason,
-                                override.trackSelectionData);
+                                override.type);
             }
         }
 

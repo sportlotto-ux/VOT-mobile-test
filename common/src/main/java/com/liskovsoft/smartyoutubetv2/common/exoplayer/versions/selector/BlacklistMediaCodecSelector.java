@@ -75,10 +75,4 @@ public class BlacklistMediaCodecSelector implements MediaCodecSelector {
         return filteredCodecInfos;
     }
 
-    // Exo 2.10
-    @Nullable
-    @Override
-    public MediaCodecInfo getPassthroughDecoderInfo() throws MediaCodecUtil.DecoderQueryException {
-        return MediaCodecUtil.getPassthroughDecoderInfo();
-    }
 }

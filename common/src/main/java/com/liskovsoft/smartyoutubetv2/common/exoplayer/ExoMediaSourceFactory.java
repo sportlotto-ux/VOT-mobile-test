@@ -291,7 +291,7 @@ public class ExoMediaSourceFactory {
         DefaultHttpDataSource.Factory dataSourceFactory = new DefaultHttpDataSource.Factory()
                 .setUserAgent(USER_AGENT)
                 .setTransferListener(bandwidthMeter)
-                .setConnectionTimeoutMs((int) OkHttpManager.getConnectTimeoutMs())
+                .setConnectTimeoutMs((int) OkHttpManager.getConnectTimeoutMs())
                 .setReadTimeoutMs((int) OkHttpManager.getReadTimeoutMs())
                 .setAllowCrossProtocolRedirects(true); // allowCrossProtocolRedirects = true
 
