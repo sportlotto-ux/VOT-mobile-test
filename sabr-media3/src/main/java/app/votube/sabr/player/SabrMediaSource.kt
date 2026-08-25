@@ -88,14 +88,14 @@ class SabrMediaSource(
 
     private var elapsedRealtimeOffsetMs: Long = C.TIME_UNSET
 
-    @get:Synchronized
+    @Synchronized
     override fun getMediaItem(): MediaItem {
         return mediaItem
     }
 
     override fun canUpdateMediaItem(mediaItem: MediaItem): Boolean {
         val existingConfiguration =
-            Assertions.checkNotNull<LocalConfiguration>(mediaItem.localConfiguration)
+            Assertions.checkNotNull<LocalConfiguration>(this.mediaItem.localConfiguration)
         val newConfiguration = mediaItem.localConfiguration
         return newConfiguration != null && newConfiguration.uri == existingConfiguration.uri
                 && newConfiguration.streamKeys == existingConfiguration.streamKeys

@@ -2,7 +2,6 @@ package app.votube.sabr.manifest
 
 import android.net.Uri
 import android.util.Base64
-import androidx.core.net.toUri
 import androidx.media3.common.C
 import androidx.media3.common.StreamKey
 import androidx.media3.common.util.UnstableApi
@@ -44,9 +43,8 @@ class SabrManifest(
         streamInfos: List<SabrStreamInfo>,
     ) : this(
         videoId,
-        serverAbrStreamingUrl.toUri(),
-        Base64.decode(ustreamerConfigBase64UrlSafe, Base64.URL_SAFE),
-        durationMs,
+        Uri.parse(serverAbrStreamingUrl),
+        Base64.decode(ustreamerConfigBase64UrlSafe, Base64.URL_SAFE),        durationMs,
         streamInfos,
     )
 

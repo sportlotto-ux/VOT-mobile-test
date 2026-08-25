@@ -164,10 +164,6 @@ class SabrMediaPeriod(
     }
 
     override fun reevaluateBuffer(positionUs: Long) {
-        sampleStreams.filter { !it.isLoading }.forEach {
-            val manifestDurationUs = Util.msToUs(manifest.durationMs)
-            it.discardUpstreamSamplesForClippedDuration(manifestDurationUs)
-        }
         compositeSequenceableLoader.reevaluateBuffer(positionUs)
     }
 
@@ -179,11 +175,6 @@ class SabrMediaPeriod(
     override fun getNextLoadPositionUs(): Long = compositeSequenceableLoader.nextLoadPositionUs
 
     override fun readDiscontinuity(): Long {
-        for (sampleStream in sampleStreams) {
-            if (sampleStream.consumeInitialDiscontinuity()) {
-                return initialStartTimeUs
-            }
-        }
         return C.TIME_UNSET
     }
 
@@ -291,9 +282,7 @@ class SabrMediaPeriod(
             drmSessionManager,
             drmEventDispatcher,
             loadErrorHandlingPolicy,
-            mediaSourceEventDispatcher,
-            canReportInitialDiscontinuity,
-            null
+            mediaSourceEventDispatcher
         )
     }
 

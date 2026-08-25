@@ -226,7 +226,7 @@ class DefaultSabrChunkSource(
                 trackSelection.selectedFormat,
                 trackSelection.selectionReason,
                 trackSelection.selectionData,
-                representationHolder.chunkExtractor
+                representationHolder.chunkExtractor!!
             )
             return
         }

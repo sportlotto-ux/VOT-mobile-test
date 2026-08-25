@@ -7,7 +7,7 @@ import androidx.media3.common.C.ROLE_FLAG_SUPPLEMENTARY
 import androidx.media3.common.Format
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.util.UnstableApi
-import com.google.android.exoplayer2.source.sabr.protos.misc.FormatId
+import misc.Common.FormatId
 
 /**
  * Neutral stream metadata extracted from the YouTube player response.
