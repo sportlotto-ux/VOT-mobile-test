@@ -3,6 +3,8 @@ package com.liskovsoft.smartyoutubetv2.common.exoplayer.controller;
 import android.content.Context;
 import android.os.Build;
 import android.os.Build.VERSION;
+import android.os.Handler;
+import android.os.Looper;
 
 import com.google.android.exoplayer2.C;
 import com.google.android.exoplayer2.ExoPlaybackException;
@@ -57,6 +59,10 @@ public class ExoPlayerController implements Player.EventListener {
     private com.google.android.exoplayer2.SimpleExoPlayer mTranslationPlayer;
     private boolean mTranslationOverlayActive;
     private float mLastUserVolume = 1.0f;
+    private final Handler mSyncHandler = new Handler(Looper.getMainLooper());
+    private final Runnable mSyncRunnable = this::checkDriftAndSync;
+    private static final long SYNC_INTERVAL_MS = 800;
+    private static final long DRIFT_THRESHOLD_MS = 600;
 
     public ExoPlayerController(Context context, PlayerEventListener eventListener) {
         PlayerTweaksData playerTweaksData = PlayerTweaksData.instance(context);
@@ -163,11 +169,25 @@ public class ExoPlayerController implements Player.EventListener {
             mTranslationPlayer.setVolume(transVol * mLastUserVolume);
             mTranslationPlayer.prepare(audioSource);
             mTranslationPlayer.seekTo(Math.max(0, pos));
-            mTranslationPlayer.setPlayWhenReady(mPlayer.getPlayWhenReady());
             try { mTranslationPlayer.setPlaybackParameters(mPlayer.getPlaybackParameters()); } catch (Exception e) {}
+            // initial lipSync like vot: sync time/rate and then play/pause based on video state
+            if (isVideoPlaying()) {
+                mTranslationPlayer.setPlayWhenReady(true);
+                mSyncHandler.removeCallbacks(mSyncRunnable);
+                mSyncHandler.postDelayed(mSyncRunnable, SYNC_INTERVAL_MS);
+                android.util.Log.e("VOT_SYNC", "attach playing -> start drift sync");
+            } else if (!mPlayer.getPlayWhenReady()) {
+                mTranslationPlayer.setPlayWhenReady(false);
+                android.util.Log.e("VOT_SYNC", "attach paused -> pause translation");
+            } else {
+                // buffering/waiting: keep paused until playing
+                mTranslationPlayer.setPlayWhenReady(false);
+                android.util.Log.e("VOT_SYNC", "attach waiting -> pause translation");
+            }
         } catch (Exception e) { android.util.Log.e("VOT_VOL", "attach failed", e); releaseTranslationAudioPlayer(); }
     }
     private void releaseTranslationAudioPlayer() {
+        mSyncHandler.removeCallbacks(mSyncRunnable);
         if (mTranslationPlayer != null) {
             try { mTranslationPlayer.stop(true); mTranslationPlayer.release(); } catch (Exception e) {}
             mTranslationPlayer = null;
@@ -177,9 +197,82 @@ public class ExoPlayerController implements Player.EventListener {
             try { mPlayer.setVolume(mLastUserVolume); } catch (Exception e) {}
         }
     }
+    private boolean isVideoPlaying() {
+        return ExoUtils.isPlaying(mPlayer);
+    }
+    private void checkDriftAndSync() {
+        if (mTranslationPlayer == null || !mTranslationOverlayActive || mPlayer == null) return;
+        try {
+            long vPos = mPlayer.getCurrentPosition();
+            long aPos = mTranslationPlayer.getCurrentPosition();
+            long diff = Math.abs(vPos - aPos);
+            if (diff > DRIFT_THRESHOLD_MS) {
+                android.util.Log.e("VOT_SYNC", "drift correct v=" + vPos + " a=" + aPos + " diff=" + diff);
+                mTranslationPlayer.seekTo(vPos);
+            }
+            PlaybackParameters vp = mPlayer.getPlaybackParameters();
+            PlaybackParameters ap = mTranslationPlayer.getPlaybackParameters();
+            if (vp != null && ap != null && vp.speed != ap.speed) {
+                mTranslationPlayer.setPlaybackParameters(vp);
+            }
+            if (isVideoPlaying()) {
+                mSyncHandler.removeCallbacks(mSyncRunnable);
+                mSyncHandler.postDelayed(mSyncRunnable, SYNC_INTERVAL_MS);
+            }
+        } catch (Exception e) { android.util.Log.e("VOT_SYNC", "drift check fail", e); }
+    }
+    // Mirrors vot.user.js chaimu/BasePlayer lipSync: sync currentTime+playbackRate + play/pause by mode
+    private void lipSync(String mode) {
+        if (mTranslationPlayer == null || !mTranslationOverlayActive || mPlayer == null) return;
+        try {
+            long vPos = mPlayer.getCurrentPosition();
+            PlaybackParameters vp = mPlayer.getPlaybackParameters();
+            // always sync time & rate if we have source (like vot did: if (_currentSrc) { audio.currentTime = video.currentTime; audio.playbackRate = video.playbackRate })
+            try { mTranslationPlayer.seekTo(Math.max(0, vPos)); } catch (Exception ignored) {}
+            try { if (vp != null) mTranslationPlayer.setPlaybackParameters(vp); } catch (Exception ignored) {}
+            android.util.Log.e("VOT_SYNC", "lipSync mode=" + mode + " vPos=" + vPos + " playWhenReady=" + mPlayer.getPlayWhenReady() + " state=" + mPlayer.getPlaybackState() + " isPlaying=" + isVideoPlaying());
+            if (mode == null) return;
+            switch (mode) {
+                case "playing":
+                case "play":
+                    if (isVideoPlaying()) {
+                        mTranslationPlayer.setPlayWhenReady(true);
+                        mSyncHandler.removeCallbacks(mSyncRunnable);
+                        mSyncHandler.postDelayed(mSyncRunnable, SYNC_INTERVAL_MS);
+                    } else if (!mPlayer.getPlayWhenReady()) {
+                        mTranslationPlayer.setPlayWhenReady(false);
+                        mSyncHandler.removeCallbacks(mSyncRunnable);
+                    }
+                    break;
+                case "seeked":
+                    if (isVideoPlaying()) {
+                        mTranslationPlayer.setPlayWhenReady(true);
+                        mSyncHandler.removeCallbacks(mSyncRunnable);
+                        mSyncHandler.postDelayed(mSyncRunnable, SYNC_INTERVAL_MS);
+                    } else {
+                        mTranslationPlayer.setPlayWhenReady(false);
+                        mSyncHandler.removeCallbacks(mSyncRunnable);
+                    }
+                    break;
+                case "pause":
+                case "waiting":
+                case "ended":
+                    mTranslationPlayer.setPlayWhenReady(false);
+                    mSyncHandler.removeCallbacks(mSyncRunnable);
+                    break;
+                case "ratechange":
+                    // already synced above
+                    break;
+                default: break;
+            }
+        } catch (Exception e) { android.util.Log.e("VOT_SYNC", "lipSync fail mode=" + mode, e); }
+    }
     private void syncTranslationPlayWhenReady() {
         if (mTranslationPlayer != null && mTranslationOverlayActive && mPlayer != null) {
-            mTranslationPlayer.setPlayWhenReady(mPlayer.getPlayWhenReady());
+            // fallback: delegate to lipSync for correct handling
+            if (mPlayer.getPlayWhenReady() && isVideoPlaying()) lipSync("play");
+            else if (!mPlayer.getPlayWhenReady()) lipSync("pause");
+            else lipSync(null);
         }
     }
 
@@ -249,7 +342,8 @@ public class ExoPlayerController implements Player.EventListener {
         if (mPlayer != null) {
             mPlayer.setPlayWhenReady(play);
         }
-        syncTranslationPlayWhenReady();
+        // mirror vot's handleVideoEvent play/pause
+        lipSync(play ? "play" : "pause");
     }
 
     public boolean getPlayWhenReady() {
@@ -427,6 +521,12 @@ public class ExoPlayerController implements Player.EventListener {
         boolean isPlaybackEnded = Player.STATE_ENDED == playbackState && playWhenReady;
         boolean isBuffering = Player.STATE_BUFFERING == playbackState && playWhenReady;
 
+        // --- VOT lipSync mirror ---
+        if (isPlayPressed) lipSync("playing");
+        else if (isPausePressed) lipSync("pause");
+        else if (isPlaybackEnded) lipSync("ended");
+        else if (isBuffering) lipSync("waiting");
+
         // Fix chapters (seek and play) after playback ends
         if (isPlaybackEnded && mIsEnded) {
             return;
@@ -451,14 +551,8 @@ public class ExoPlayerController implements Player.EventListener {
     @Override
     public void onPositionDiscontinuity(int reason) {
         Log.e(TAG, "onPositionDiscontinuity reason=" + reason);
-        if (mTranslationPlayer != null && mTranslationOverlayActive && mPlayer != null) {
-            long pos = mPlayer.getCurrentPosition();
-            try {
-                android.util.Log.e("VOT_SYNC", "discontinuity sync pos=" + pos + " reason=" + reason);
-                mTranslationPlayer.seekTo(pos);
-                mTranslationPlayer.setPlayWhenReady(mPlayer.getPlayWhenReady());
-                mTranslationPlayer.setPlaybackParameters(mPlayer.getPlaybackParameters());
-            } catch (Exception e) { android.util.Log.e("VOT_SYNC", "disc sync fail", e); }
+        if (reason != Player.DISCONTINUITY_REASON_PERIOD_TRANSITION) {
+            lipSync("seeked");
         }
         // Fix video loop on 480p with legacy codes enabled
         if (reason == Player.DISCONTINUITY_REASON_PERIOD_TRANSITION) {
@@ -469,14 +563,13 @@ public class ExoPlayerController implements Player.EventListener {
 
     @Override
     public void onSeekProcessed() {
-        if (mTranslationPlayer != null && mTranslationOverlayActive && mPlayer != null) {
-            long pos = mPlayer.getCurrentPosition();
-            try {
-                android.util.Log.e("VOT_SYNC", "seekProcessed sync pos=" + pos);
-                mTranslationPlayer.seekTo(pos);
-            } catch (Exception e) { android.util.Log.e("VOT_SYNC", "seekProcessed fail", e); }
-        }
+        lipSync("seeked");
         mEventListener.onSeekEnd();
+    }
+
+    @Override
+    public void onPlaybackParametersChanged(PlaybackParameters playbackParameters) {
+        lipSync("ratechange");
     }
 
     public float getSpeed() {
@@ -514,6 +607,7 @@ public class ExoPlayerController implements Player.EventListener {
     public void setPitch(float pitch) {
         if (mPlayer != null && pitch > 0) {
             mPlayer.setPlaybackParameters(new PlaybackParameters(mPlayer.getPlaybackParameters().speed, pitch));
+            // onPlaybackParametersChanged will sync translation via lipSync
         }
     }
 
