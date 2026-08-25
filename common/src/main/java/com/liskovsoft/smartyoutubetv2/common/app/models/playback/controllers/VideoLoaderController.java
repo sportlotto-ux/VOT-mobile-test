@@ -698,16 +698,10 @@ public class VideoLoaderController extends BasePlayerController {
     public boolean reopenWithoutTranslationAudio() {
         com.liskovsoft.smartyoutubetv2.common.app.views.PlaybackView player = getPlayer();
         if (player == null) return false;
-        int type = effectiveOpenTypeForTranslation();
-        if (type == 1 && mLastFormatInfo != null) {
-            player.openDash(mLastFormatInfo);
-            return true;
-        }
-        if (type == 2 && mLastFormatInfo != null) {
-            player.openSabr(mLastFormatInfo);
-            return true;
-        }
-        player.clearTranslationAudio();
+        // For overlay implementation clearing second player is enough, keep position
+        // Previously openDash/openSabr didn't release translationPlayer and lost position
+        try { player.clearTranslationAudio(); } catch (Exception e) { android.util.Log.e("VOT_UI", "clearTranslationAudio failed", e); }
+        // Return even if was DASH/SABR - no need to reopen whole source, overlay will be removed
         return true;
     }
 

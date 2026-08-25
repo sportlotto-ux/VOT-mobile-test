@@ -190,6 +190,11 @@ public class ExoPlayerController implements Player.EventListener {
     }
 
     private void openMediaSource(MediaSource mediaSource) {
+        // ensure previous translation overlay doesn't leak to next video
+        if (mTranslationOverlayActive) {
+            android.util.Log.e("VOT_SYNC", "openMediaSource clears previous translation overlay");
+            releaseTranslationAudioPlayer();
+        }
         resetPlayerState(); // fixes occasional video artifacts and problems with quality switching
         setQualityInfo("");
 
