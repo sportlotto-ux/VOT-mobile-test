@@ -2,7 +2,7 @@ name: Build Debug APK
 
 on:
   push:
-    branches: [ "master", "smarttube", "smartertube", "vot-base" ]
+    branches: [ "master", "smarttube", "smartertube", "vot-base", "smarttube-stable", "smartertube-stable" ]
   workflow_dispatch:
 
 jobs:
