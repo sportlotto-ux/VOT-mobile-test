@@ -79,6 +79,14 @@ public class VoiceOverTranslationController extends BasePlayerController {
         else if (videoDur > 0) durationSec = (int)(videoDur / 1000);
         android.util.Log.e("VOT_UI", "duration choose playerDur=" + playerDur + " videoDur=" + videoDur + " -> durationSec=" + durationSec);
 
+        // Yandex VOT API cannot translate videos longer than 4 hours -> fail fast instead of endless WAITING retries
+        if (durationSec > 4 * 3600) {
+            mRequestInProgress = false;
+            updateUiState();
+            if (ctx != null) MessageHelpers.showMessage(ctx, R.string.voice_over_translate_not_available);
+            return;
+        }
+
         runTranslateWithRetry(videoUrl, title, durationSec, formatInfo, video, ctx, loader, 0);
     }
 
@@ -109,6 +117,17 @@ public class VoiceOverTranslationController extends BasePlayerController {
                 mHandler.post(() -> {
                     if (result != null && result.isReady() && result.url != null) {
                         String proxied = VotSettings.instance(c).proxifyAudioUrl(result.url);
+                        // Guard: user may have switched videos while the translation was queued/running
+                        Video current = getVideo();
+                        if (current == null || video.videoId == null || current.videoId == null
+                                || !video.videoId.equals(current.videoId)) {
+                            mRequestInProgress = false;
+                            mTranslationEnabledForVideoId = null;
+                            mTranslationAudioUrl = null;
+                            Log.e("VOT_UI", "stale translation result dropped, video changed");
+                            updateUiState();
+                            return;
+                        }
                         Log.e("VOT_UI", "reopenWithTranslationAudio proxied=" + proxied);
                         boolean ok = false;
                         if (loader != null) ok = loader.reopenWithTranslationAudio(proxied);

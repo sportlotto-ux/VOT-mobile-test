@@ -147,7 +147,26 @@ public final class VotSettings
     }
     
     public String proxifyAudioUrl(final String s) {
-        return s;
+        if (s == null || s.isEmpty()) {
+            return s;
+        }
+        if (!isAudioProxyEnabled()) {
+            return s;
+        }
+        try {
+            String url = s.trim();
+            // VTube model: the audio is served from Yandex private S3 (AUDIO_SOURCE_PREFIX),
+            // which is not directly reachable. The VOT worker both creates the translation and
+            // proxies the audio stream at AUDIO_PROXY_PATH_PREFIX. Rewrite the source URL accordingly.
+            if (!url.startsWith(AUDIO_SOURCE_PREFIX)) {
+                // Unknown source; keep as-is instead of guessing the proxy contract.
+                return s;
+            }
+            String rest = url.substring(AUDIO_SOURCE_PREFIX.length());
+            return "https://" + getAudioProxyHost() + AUDIO_PROXY_PATH_PREFIX + rest;
+        } catch (Exception e) {
+            return s;
+        }
     }
     
     public void resetMixToDefaults() {
