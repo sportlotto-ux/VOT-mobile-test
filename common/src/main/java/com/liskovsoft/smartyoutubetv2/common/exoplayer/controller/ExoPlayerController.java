@@ -207,58 +207,53 @@ public class ExoPlayerController implements Player.EventListener {
     }
     private void startAdaptiveDucking(float duckedOrigVol, float transVol) {
         stopAdaptiveDucking();
+        final float fixedDucked = duckedOrigVol;
         try {
             int sessionId = mTranslationPlayer != null ? mTranslationPlayer.getAudioSessionId() : 0;
             if (sessionId == 0 || sessionId == -1) {
                 android.util.Log.e("VOT_VOL", "adaptive duck fallback: no session, keep fixed duck " + duckedOrigVol);
-                return; // fallback fixed duck уже стоит
+                return;
             }
             mTranslationVisualizer = new android.media.audiofx.Visualizer(sessionId);
             mTranslationVisualizer.setCaptureSize(android.media.audiofx.Visualizer.getCaptureSizeRange()[1]);
+            // OnDataCaptureListener избегает getWaveform (не найден в этом SDK) и даёт мгновенный attack
+            mTranslationVisualizer.setDataCaptureListener(new android.media.audiofx.Visualizer.OnDataCaptureListener() {
+                @Override public void onWaveFormDataCapture(android.media.audiofx.Visualizer v, byte[] waveform, int sr) {
+                    if (mTranslationPlayer == null || !mTranslationOverlayActive || mPlayer == null) return;
+                    try {
+                        long sum = 0;
+                        for (byte b : waveform) { int d = (b & 0xFF) - 128; sum += d * d; }
+                        int rms = (int) Math.sqrt(sum / (double) waveform.length);
+                        boolean hasSpeech = rms > DUCK_RMS_THRESHOLD;
+                        long now = System.currentTimeMillis();
+                        if (hasSpeech) mLastSpeechMs = now;
+                        boolean shouldDuck = hasSpeech || (now - mLastSpeechMs) < DUCK_RELEASE_MS;
+                        if (shouldDuck && !mIsDucked) {
+                            mPlayer.setVolume(fixedDucked);
+                            mIsDucked = true;
+                            android.util.Log.e("VOT_VOL", "adaptive duck ON rms=" + rms + " orig=" + fixedDucked);
+                        } else if (!shouldDuck && mIsDucked) {
+                            mPlayer.setVolume(mLastUserVolume);
+                            mIsDucked = false;
+                            android.util.Log.e("VOT_VOL", "adaptive duck OFF rms=" + rms + " orig=" + mLastUserVolume);
+                        }
+                    } catch (Exception e) { android.util.Log.e("VOT_VOL", "duck capture fail", e); }
+                }
+                @Override public void onFftDataCapture(android.media.audiofx.Visualizer v, byte[] fft, int sr) {}
+            }, android.media.audiofx.Visualizer.getMaxCaptureRate() / 2, true, false);
             mTranslationVisualizer.setEnabled(true);
         } catch (Exception e) {
             android.util.Log.e("VOT_VOL", "Visualizer init failed, keep fixed duck", e);
             mTranslationVisualizer = null;
             return;
         }
-        final float fixedDucked = duckedOrigVol;
-        final byte[] waveform = new byte[256];
-        mDuckRunnable = new Runnable() {
-            @Override public void run() {
-                if (mTranslationPlayer == null || !mTranslationOverlayActive || mTranslationVisualizer == null) return;
-                try {
-                    int res = mTranslationVisualizer.getWaveform(waveform);
-                    int rms = 0;
-                    if (res == android.media.audiofx.Visualizer.SUCCESS) {
-                        long sum = 0;
-                        for (byte b : waveform) { int v = b & 0xFF; int d = v - 128; sum += d * d; }
-                        rms = (int)Math.sqrt(sum / (double)waveform.length);
-                    }
-                    boolean hasSpeech = rms > DUCK_RMS_THRESHOLD;
-                    long now = System.currentTimeMillis();
-                    if (hasSpeech) mLastSpeechMs = now;
-                    boolean shouldDuck = hasSpeech || (now - mLastSpeechMs) < DUCK_RELEASE_MS;
-                    // поддерживаем разницу: перевод всегда 100%, оригинал 10% когда shouldDuck, иначе 100%
-                    if (shouldDuck && !mIsDucked) {
-                        mPlayer.setVolume(fixedDucked);
-                        mIsDucked = true;
-                        android.util.Log.e("VOT_VOL", "adaptive duck ON rms=" + rms + " orig=" + fixedDucked);
-                    } else if (!shouldDuck && mIsDucked) {
-                        mPlayer.setVolume(mLastUserVolume);
-                        mIsDucked = false;
-                        android.util.Log.e("VOT_VOL", "adaptive duck OFF rms=" + rms + " orig=" + mLastUserVolume);
-                    }
-                } catch (Exception e) { android.util.Log.e("VOT_VOL", "duck poll fail", e); }
-                mDuckHandler.postDelayed(this, DUCK_POLL_MS);
-            }
-        };
-        mDuckHandler.postDelayed(mDuckRunnable, DUCK_POLL_MS);
         android.util.Log.e("VOT_VOL", "adaptive duck start threshold=" + DUCK_RMS_THRESHOLD + " release=" + DUCK_RELEASE_MS);
     }
     private void stopAdaptiveDucking() {
         if (mDuckHandler != null && mDuckRunnable != null) mDuckHandler.removeCallbacks(mDuckRunnable);
         mDuckRunnable = null;
         if (mTranslationVisualizer != null) {
+            try { mTranslationVisualizer.setDataCaptureListener(null, 0, false, false); } catch (Exception e) {}
             try { mTranslationVisualizer.setEnabled(false); mTranslationVisualizer.release(); } catch (Exception e) {}
             mTranslationVisualizer = null;
         }
