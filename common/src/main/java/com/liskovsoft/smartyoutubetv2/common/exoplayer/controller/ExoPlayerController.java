@@ -713,9 +713,18 @@ public class ExoPlayerController implements Player.Listener {
 
     public void setVolume(float volume) {
         if (mPlayer != null && volume >= 0) {
-            mPlayer.setVolume(Math.min(volume, 1f));
-
-            //applyVolumeBoost(volume);
+            mLastUserVolume = Math.min(volume, 1f);
+            if (mTranslationOverlayActive) {
+                float origVol = 0.10f;
+                try { origVol = com.liskovsoft.smartyoutubetv2.common.vot.VotSettings.instance(mContext).getOriginalVolumePercent() / 100.0f; } catch (Exception e) {}
+                float transVol = 1.0f;
+                try { transVol = com.liskovsoft.smartyoutubetv2.common.vot.VotSettings.instance(mContext).getTranslationVolumePercent() / 100.0f; } catch (Exception e) {}
+                mPlayer.setVolume(origVol * mLastUserVolume);
+                if (mTranslationPlayer != null) mTranslationPlayer.setVolume(transVol * mLastUserVolume);
+                Log.e("VOT_VOL", "setVolume ducked orig=" + (origVol*mLastUserVolume) + " trans=" + (transVol*mLastUserVolume) + " user=" + mLastUserVolume);
+            } else {
+                mPlayer.setVolume(mLastUserVolume);
+            }
         }
     }
     
