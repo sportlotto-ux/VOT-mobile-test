@@ -211,9 +211,16 @@ public class ExoMediaSourceFactory {
                 .setUri("sabr://" + formatInfo.getVideoId())
                 .build();
 
+        showSourceTypeToast("SABR");
         return new SabrMediaSource.Factory(mContext, manifest, poTokenProvider)
                 .setLoadErrorHandlingPolicy(new SabrDefaultLoadErrorHandlingPolicy())
                 .createMediaSource(mediaItem);
+    }
+
+    // TODO(media3): temporary source-type toast, remove after verification
+    private void showSourceTypeToast(String type) {
+        new android.os.Handler(android.os.Looper.getMainLooper()).post(() ->
+                android.widget.Toast.makeText(mContext, "Source: " + type, android.widget.Toast.LENGTH_SHORT).show());
     }
 
     private static long getDurationMs(MediaItemFormatInfo formatInfo) {
@@ -280,6 +287,7 @@ public class ExoMediaSourceFactory {
     }
 
     private MediaSource buildDashMediaSource(MediaItemFormatInfo formatInfo) {
+        showSourceTypeToast("DASH");
         // Are you using FrameworkSampleSource or ExtractorSampleSource when you build your player?
         DashMediaSource dashSource = new DashMediaSource.Factory(
                 getDashChunkSourceFactory(),
