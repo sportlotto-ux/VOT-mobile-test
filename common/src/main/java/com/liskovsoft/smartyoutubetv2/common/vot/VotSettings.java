@@ -47,6 +47,12 @@ public final class VotSettings
             edit.putBoolean("lively_default_off_20260326", true);
             n = 1;
         }
+        // enable lively by default for en->ru (fix 66ef82d5aa7b: not lively)
+        if (!mPrefs.getBoolean("lively_default_on_20260825", false)) {
+            edit.putBoolean("use_lively_voice", true);
+            edit.putBoolean("lively_default_on_20260825", true);
+            n = 1;
+        }
         if (!this.mPrefs.contains("original_volume_percent")) {
             edit.putInt("original_volume_percent", 10);
             n = 1;
@@ -111,7 +117,7 @@ public final class VotSettings
     }
     
     public int getTranslationVolumePercent() {
-        return Math.max(50, Math.min(100, this.mPrefs.getInt("translation_volume_percent", 100)));
+        return Math.max(50, Math.min(200, this.mPrefs.getInt("translation_volume_percent", 100)));
     }
     
     public String getYandexOauthToken() {
@@ -141,7 +147,26 @@ public final class VotSettings
     }
     
     public String proxifyAudioUrl(final String s) {
-        return s;
+        if (s == null || s.isEmpty()) {
+            return s;
+        }
+        if (!isAudioProxyEnabled()) {
+            return s;
+        }
+        try {
+            String url = s.trim();
+            // VTube model: the audio is served from Yandex private S3 (AUDIO_SOURCE_PREFIX),
+            // which is not directly reachable. The VOT worker both creates the translation and
+            // proxies the audio stream at AUDIO_PROXY_PATH_PREFIX. Rewrite the source URL accordingly.
+            if (!url.startsWith(AUDIO_SOURCE_PREFIX)) {
+                // Unknown source; keep as-is instead of guessing the proxy contract.
+                return s;
+            }
+            String rest = url.substring(AUDIO_SOURCE_PREFIX.length());
+            return "https://" + getAudioProxyHost() + AUDIO_PROXY_PATH_PREFIX + rest;
+        } catch (Exception e) {
+            return s;
+        }
     }
     
     public void resetMixToDefaults() {
@@ -162,7 +187,7 @@ public final class VotSettings
     }
     
     public void setTranslationVolumePercent(int max) {
-        max = Math.max(50, Math.min(100, max));
+        max = Math.max(50, Math.min(200, max));
         this.mPrefs.edit().putInt("translation_volume_percent", max).apply();
     }
     

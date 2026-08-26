@@ -38,7 +38,7 @@ allprojects {
         //jcenter()
     }
 
-    // Migration to media3: androidx.media3 requires minSdk >= 21.
+    // Target is Android 7+ (API 24); media3 requires >= 21.
     // Raise minSdk for every module regardless of the pinned SharedModules/constants.gradle value.
     afterEvaluate { project ->
         def androidExt = project.extensions.findByName('android')
@@ -46,7 +46,7 @@ allprojects {
             def current = androidExt.defaultConfig.minSdkVersion
             int currentApi = current == null ? 14 : current.apiLevel
             if (currentApi < 21) {
-                androidExt.defaultConfig.minSdkVersion 21
+                androidExt.defaultConfig.minSdkVersion 24
             }
         }
     }

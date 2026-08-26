@@ -255,7 +255,7 @@ public class VotApiServiceImpl implements VotApiService {
         JSONArray arr = new JSONArray();
         for (byte b : body) arr.put(b & 0xFF);
         json.put("body", arr);
-        Log.e(TAG, "postViaWorker " + path + " bodyLen=" + body.length + " headers=" + headers.toString().substring(0, Math.min(200, headers.toString().length())));
+        Log.e(TAG, "postViaWorker " + path + " bodyLen=" + body.length + " headers=" + redactHeaders(headers));
         Request req = new Request.Builder()
                 .url("https://" + WORKER_HOST + path)
                 .post(RequestBody.create(JSON, json.toString()))
@@ -265,6 +265,24 @@ public class VotApiServiceImpl implements VotApiService {
             Log.e(TAG, "postViaWorker resp " + path + " code=" + resp.code() + " len=" + (bytes != null ? bytes.length : -1) + " head=" + (bytes != null ? new String(bytes, 0, Math.min(bytes.length, 300), Charset.forName("UTF-8")) : "null"));
             if (!resp.isSuccessful()) return null;
             return bytes;
+        }
+    }
+
+    private static String redactHeaders(JSONObject headers) {
+        try {
+            JSONObject safe = new JSONObject();
+            JSONArray keys = headers.names();
+            if (keys != null) {
+                for (int i = 0; i < keys.length(); i++) {
+                    String k = keys.getString(i);
+                    // session key is a credential - never log it
+                    if ("Sec-Vtrans-Sk".equalsIgnoreCase(k)) safe.put(k, "***");
+                    else safe.put(k, headers.getString(k));
+                }
+            }
+            return safe.toString();
+        } catch (Exception e) {
+            return "<redacted>";
         }
     }
 }

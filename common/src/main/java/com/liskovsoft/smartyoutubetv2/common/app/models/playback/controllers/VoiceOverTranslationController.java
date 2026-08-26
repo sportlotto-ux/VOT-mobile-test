@@ -72,7 +72,20 @@ public class VoiceOverTranslationController extends BasePlayerController {
 
         String videoUrl = "https://www.youtube.com/watch?v=" + video.videoId;
         String title = video.getTitle() != null ? video.getTitle() : "";
-        int durationSec = video.getDurationMs() > 0 ? (int)(video.getDurationMs()/1000) : 300;
+        long playerDur = getPlayer() != null ? getPlayer().getDurationMs() : -1;
+        long videoDur = video.getDurationMs();
+        int durationSec = 300;
+        if (playerDur > 0) durationSec = (int)(playerDur / 1000);
+        else if (videoDur > 0) durationSec = (int)(videoDur / 1000);
+        android.util.Log.e("VOT_UI", "duration choose playerDur=" + playerDur + " videoDur=" + videoDur + " -> durationSec=" + durationSec);
+
+        // Yandex VOT API cannot translate videos longer than 4 hours -> fail fast instead of endless WAITING retries
+        if (durationSec > 4 * 3600) {
+            mRequestInProgress = false;
+            updateUiState();
+            if (ctx != null) MessageHelpers.showMessage(ctx, R.string.voice_over_translate_not_available);
+            return;
+        }
 
         runTranslateWithRetry(videoUrl, title, durationSec, formatInfo, video, ctx, loader, 0);
     }
@@ -93,7 +106,10 @@ public class VoiceOverTranslationController extends BasePlayerController {
                 }
                 VotApiServiceImpl service = new VotApiServiceImpl(c);
                 String requestLang = "auto";
-                Log.e("VOT_UI", "calling translate url=" + videoUrl + " retry=" + retryCount);
+                try {
+                    if (VotSettings.instance(c).isUseLivelyVoice()) requestLang = "en";
+                } catch (Exception ignored) {}
+                Log.e("VOT_UI", "calling translate url=" + videoUrl + " retry=" + retryCount + " reqLang=" + requestLang + " lively=" + requestLang.equals("en"));
                 VotTranslateResult result = service.translate(videoUrl, title, durationSec, requestLang, "ru", formatInfo, video.videoId, progress -> {
                     Log.e("VOT_UI", "progress " + progress);
                 });
@@ -101,6 +117,17 @@ public class VoiceOverTranslationController extends BasePlayerController {
                 mHandler.post(() -> {
                     if (result != null && result.isReady() && result.url != null) {
                         String proxied = VotSettings.instance(c).proxifyAudioUrl(result.url);
+                        // Guard: user may have switched videos while the translation was queued/running
+                        Video current = getVideo();
+                        if (current == null || video.videoId == null || current.videoId == null
+                                || !video.videoId.equals(current.videoId)) {
+                            mRequestInProgress = false;
+                            mTranslationEnabledForVideoId = null;
+                            mTranslationAudioUrl = null;
+                            Log.e("VOT_UI", "stale translation result dropped, video changed");
+                            updateUiState();
+                            return;
+                        }
                         Log.e("VOT_UI", "reopenWithTranslationAudio proxied=" + proxied);
                         boolean ok = false;
                         if (loader != null) ok = loader.reopenWithTranslationAudio(proxied);

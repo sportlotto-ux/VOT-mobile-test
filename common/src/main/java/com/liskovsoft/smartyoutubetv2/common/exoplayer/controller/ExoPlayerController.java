@@ -54,6 +54,25 @@ public class ExoPlayerController implements Player.Listener {
     private androidx.media3.exoplayer.ExoPlayer mTranslationPlayer;
     private boolean mTranslationOverlayActive;
     private float mLastUserVolume = 1.0f;
+    // --- VOT sync machinery (ported from unified bc780a9/e565caf) ---
+    private float mVotOrigVol = 0.10f;
+    private float mVotTransVol = 1.0f;
+    private static java.lang.ref.WeakReference<ExoPlayerController> sActiveVotInstance;
+    private android.media.audiofx.Visualizer mTranslationVisualizer;
+    private final android.os.Handler mDuckHandler = new android.os.Handler(android.os.Looper.getMainLooper());
+    private Runnable mDuckRunnable;
+    private long mLastSpeechMs = 0;
+    private boolean mIsDucked = false;
+    private static final int DUCK_RMS_THRESHOLD = 800;
+    private static final long DUCK_RELEASE_MS = 600;
+    private static final long DUCK_POLL_MS = 50;
+    private final android.os.Handler mSyncHandler = new android.os.Handler(android.os.Looper.getMainLooper());
+    private Runnable mSyncRunnable;
+    private final android.os.Handler mSeekHandler = new android.os.Handler(android.os.Looper.getMainLooper());
+    private Runnable mSeekRunnable;
+    private long mPendingSeekPos = -1;
+    private boolean mSeekInProgress = false;
+    private Player.Listener mTransListener;
 
     public ExoPlayerController(Context context, PlayerEventListener eventListener) {
         PlayerTweaksData playerTweaksData = PlayerTweaksData.instance(context);
@@ -152,33 +171,218 @@ public class ExoPlayerController implements Player.Listener {
                     .build();
             mTranslationOverlayActive = true;
             mLastUserVolume = mPlayer.getVolume();
-            // duck original
-            float origVol = 0.15f; // 15% original when translation active
+            float origVol = 0.10f;
             try { origVol = com.liskovsoft.smartyoutubetv2.common.vot.VotSettings.instance(mContext).getOriginalVolumePercent() / 100.0f; } catch (Exception e) {}
             float transVol = 1.0f;
             try { transVol = com.liskovsoft.smartyoutubetv2.common.vot.VotSettings.instance(mContext).getTranslationVolumePercent() / 100.0f; } catch (Exception e) {}
+            mVotOrigVol = origVol; mVotTransVol = transVol; sActiveVotInstance = new java.lang.ref.WeakReference<>(this);
             mPlayer.setVolume(origVol * mLastUserVolume);
-            mTranslationPlayer.setVolume(transVol * 1.0f);
+            mTranslationPlayer.setVolume(Math.min(1.0f, transVol * mLastUserVolume));
             mTranslationPlayer.prepare(audioSource);
             mTranslationPlayer.seekTo(Math.max(0, pos));
-            mTranslationPlayer.setPlayWhenReady(mPlayer.getPlayWhenReady());
-            // sync playback parameters
             try { mTranslationPlayer.setPlaybackParameters(mPlayer.getPlaybackParameters()); } catch (Exception e) {}
-        } catch (Exception e) { releaseTranslationAudioPlayer(); }
+            mIsDucked = true;
+            mLastSpeechMs = System.currentTimeMillis();
+            if (isVideoPlaying()) {
+                mTranslationPlayer.setPlayWhenReady(true);
+            } else if (!mPlayer.getPlayWhenReady()) {
+                mTranslationPlayer.setPlayWhenReady(false);
+            } else {
+                mTranslationPlayer.setPlayWhenReady(false);
+            }
+            startAdaptiveDucking(origVol * mLastUserVolume, transVol * mLastUserVolume);
+            mTransListener = new Player.Listener() {
+                @Override public void onPlaybackStateChanged(int playbackState) {
+                    if (playbackState == Player.STATE_READY) {
+                        long vPos = mPlayer != null ? mPlayer.getCurrentPosition() : -1;
+                        long aPos = mTranslationPlayer != null ? mTranslationPlayer.getCurrentPosition() : -1;
+                        Log.e("VOT_SYNC", "trans READY vPos=" + vPos + " aPos=" + aPos + " diff=" + (vPos - aPos));
+                    }
+                }
+            };
+            try { mTranslationPlayer.addListener(mTransListener); } catch (Exception e) {}
+            startPeriodicSync();
+        } catch (Exception e) { Log.e("VOT_VOL", "attach failed", e); releaseTranslationAudioPlayer(); }
     }
     private void releaseTranslationAudioPlayer() {
+        stopAdaptiveDucking();
+        stopPeriodicSync();
+        if (mSeekHandler != null && mSeekRunnable != null) mSeekHandler.removeCallbacks(mSeekRunnable);
+        mSeekRunnable = null; mPendingSeekPos = -1; mSeekInProgress = false;
         if (mTranslationPlayer != null) {
+            try { if (mTransListener != null) mTranslationPlayer.removeListener(mTransListener); } catch (Exception e) {}
             try { mTranslationPlayer.stop(); mTranslationPlayer.release(); } catch (Exception e) {}
             mTranslationPlayer = null;
         }
+        mTransListener = null;
         mTranslationOverlayActive = false;
+        mIsDucked = false;
+        if (sActiveVotInstance != null && sActiveVotInstance.get() == this) sActiveVotInstance = null;
         if (mPlayer != null) {
             try { mPlayer.setVolume(mLastUserVolume); } catch (Exception e) {}
         }
     }
+    private void startAdaptiveDucking(float duckedOrigVol, float transVol) {
+        stopAdaptiveDucking();
+        try {
+            int sessionId = mTranslationPlayer != null ? mTranslationPlayer.getAudioSessionId() : 0;
+            if (sessionId == 0 || sessionId == -1) {
+                return;
+            }
+            mTranslationVisualizer = new android.media.audiofx.Visualizer(sessionId);
+            mTranslationVisualizer.setCaptureSize(android.media.audiofx.Visualizer.getCaptureSizeRange()[1]);
+            mTranslationVisualizer.setDataCaptureListener(new android.media.audiofx.Visualizer.OnDataCaptureListener() {
+                @Override public void onWaveFormDataCapture(android.media.audiofx.Visualizer v, byte[] waveform, int sr) {
+                    if (mTranslationPlayer == null || !mTranslationOverlayActive || mPlayer == null) return;
+                    try {
+                        long sum = 0;
+                        for (byte b : waveform) { int d = (b & 0xFF) - 128; sum += d * d; }
+                        int rms = (int) Math.sqrt(sum / (double) waveform.length);
+                        boolean hasSpeech = rms > DUCK_RMS_THRESHOLD;
+                        long now = System.currentTimeMillis();
+                        if (hasSpeech) mLastSpeechMs = now;
+                        boolean shouldDuck = hasSpeech || (now - mLastSpeechMs) < DUCK_RELEASE_MS;
+                        float ducked = mVotOrigVol * mLastUserVolume;
+                        if (shouldDuck && !mIsDucked) {
+                            mPlayer.setVolume(ducked);
+                            mIsDucked = true;
+                        } else if (!shouldDuck && mIsDucked) {
+                            mPlayer.setVolume(mLastUserVolume);
+                            mIsDucked = false;
+                        }
+                    } catch (Exception e) { Log.e("VOT_VOL", "duck capture fail", e); }
+                }
+                @Override public void onFftDataCapture(android.media.audiofx.Visualizer v, byte[] fft, int sr) {}
+            }, android.media.audiofx.Visualizer.getMaxCaptureRate() / 2, true, false);
+            mTranslationVisualizer.setEnabled(true);
+        } catch (Exception e) {
+            mTranslationVisualizer = null;
+            return;
+        }
+    }
+    private void stopAdaptiveDucking() {
+        if (mDuckHandler != null && mDuckRunnable != null) mDuckHandler.removeCallbacks(mDuckRunnable);
+        mDuckRunnable = null;
+        if (mTranslationVisualizer != null) {
+            try { mTranslationVisualizer.setDataCaptureListener(null, 0, false, false); } catch (Exception e) {}
+            try { mTranslationVisualizer.setEnabled(false); mTranslationVisualizer.release(); } catch (Exception e) {}
+            mTranslationVisualizer = null;
+        }
+    }
+    private boolean isVideoPlaying() {
+        return ExoUtils.isPlaying(mPlayer);
+    }
+    private void lipSync(String mode) {
+        if (mTranslationPlayer == null || !mTranslationOverlayActive || mPlayer == null) return;
+        try {
+            long vPos = mPlayer.getCurrentPosition();
+            long aPos = mTranslationPlayer.getCurrentPosition();
+            PlaybackParameters vp = mPlayer.getPlaybackParameters();
+            // rate всегда синхроним как vot
+            try { if (vp != null) mTranslationPlayer.setPlaybackParameters(vp); } catch (Exception ignored) {}
+            if (mode == null) return;
+            switch (mode) {
+                case "playing":
+                case "play":
+                    if (isVideoPlaying()) {
+                        long vPos2 = mPlayer.getCurrentPosition();
+                        long aPos2 = mTranslationPlayer.getCurrentPosition();
+                        if (Math.abs(vPos2 - aPos2) > 1500) {
+                            try { mTranslationPlayer.seekTo(Math.max(0, vPos2)); } catch (Exception e) {}
+                        }
+                        mTranslationPlayer.setPlayWhenReady(true);
+                    } else if (!mPlayer.getPlayWhenReady()) {
+                        mTranslationPlayer.setPlayWhenReady(false);
+                    }
+                    break;
+                case "seeked":
+                    scheduleTranslationSeek(vPos);
+                    break;
+                case "pause":
+                case "waiting":
+                case "ended":
+                    mTranslationPlayer.setPlayWhenReady(false);
+                    break;
+                case "ratechange":
+                    break;
+                default: break;
+            }
+        } catch (Exception e) { Log.e("VOT_SYNC", "lipSync fail mode=" + mode, e); }
+    }
+    private void scheduleTranslationSeek(long vPos) {
+        mPendingSeekPos = Math.max(0, vPos);
+        if (mSeekRunnable != null) mSeekHandler.removeCallbacks(mSeekRunnable);
+        mSeekInProgress = true;
+        mSeekRunnable = () -> {
+            mSeekRunnable = null;
+            try {
+                long t = Math.max(0, mPlayer != null ? mPlayer.getCurrentPosition() : mPendingSeekPos);
+                boolean mirrorPlay = isVideoPlaying() || mPlayer.getPlayWhenReady();
+                if (mTranslationPlayer != null) {
+                    try { mTranslationPlayer.setPlaybackParameters(mPlayer.getPlaybackParameters()); } catch (Exception e) {}
+                    mTranslationPlayer.seekTo(t);
+                    mTranslationPlayer.setPlayWhenReady(mirrorPlay);
+                }
+            } catch (Exception e) { Log.e("VOT_SYNC", "schedule seek fail", e); }
+            finally {
+                mSeekInProgress = false;
+            }
+        };
+        mSeekHandler.postDelayed(mSeekRunnable, 60);
+    }
+    private void startPeriodicSync() {
+        stopPeriodicSync();
+        mSyncRunnable = new Runnable() {
+            @Override public void run() {
+                if (mTranslationOverlayActive && mTranslationPlayer != null && mPlayer != null && !mSeekInProgress && isVideoPlaying()) {
+                    long vPos = mPlayer.getCurrentPosition();
+                    long aPos = mTranslationPlayer.getCurrentPosition();
+                    long diff = vPos - aPos;
+                    long adiff = Math.abs(diff);
+                    if (adiff > 300) {
+                        try { mTranslationPlayer.seekTo(Math.max(0, vPos)); } catch (Exception e) {}
+                    }
+                }
+                mSyncHandler.postDelayed(this, 600);
+            }
+        };
+        mSyncHandler.postDelayed(mSyncRunnable, 600);
+    }
+    private void stopPeriodicSync() {
+        if (mSyncHandler != null && mSyncRunnable != null) mSyncHandler.removeCallbacks(mSyncRunnable);
+        mSyncRunnable = null;
+    }
+    public void updateVotVolumes() {
+        if (!mTranslationOverlayActive || mPlayer == null) return;
+        try {
+            float origVol = 0.10f;
+            try { origVol = com.liskovsoft.smartyoutubetv2.common.vot.VotSettings.instance(mContext).getOriginalVolumePercent() / 100.0f; } catch (Exception e) {}
+            float transVol = 1.0f;
+            try { transVol = com.liskovsoft.smartyoutubetv2.common.vot.VotSettings.instance(mContext).getTranslationVolumePercent() / 100.0f; } catch (Exception e) {}
+            mVotOrigVol = origVol;
+            mVotTransVol = transVol;
+            boolean shouldDuck = mIsDucked || (System.currentTimeMillis() - mLastSpeechMs) < DUCK_RELEASE_MS;
+            float origApplied = shouldDuck ? origVol * mLastUserVolume : mLastUserVolume;
+            if (mTranslationVisualizer == null) {
+                mPlayer.setVolume(origApplied);
+            } else {
+                if (mIsDucked) mPlayer.setVolume(origVol * mLastUserVolume);
+            }
+            float tVol = Math.min(1.0f, transVol * mLastUserVolume);
+            if (mTranslationPlayer != null) mTranslationPlayer.setVolume(tVol);
+        } catch (Exception e) { Log.e("VOT_VOL", "updateVotVolumes fail", e); }
+    }
+    public static void updateActiveVotVolumes(Context ctx) {
+        try {
+            ExoPlayerController inst = sActiveVotInstance != null ? sActiveVotInstance.get() : null;
+            if (inst != null) inst.updateVotVolumes();
+        } catch (Exception e) {}
+    }
     private void syncTranslationPlayWhenReady() {
         if (mTranslationPlayer != null && mTranslationOverlayActive && mPlayer != null) {
-            mTranslationPlayer.setPlayWhenReady(mPlayer.getPlayWhenReady());
+            if (mPlayer.getPlayWhenReady() && isVideoPlaying()) lipSync("play");
+            else if (!mPlayer.getPlayWhenReady()) lipSync("pause");
+            else lipSync(null);
         }
     }
 
@@ -189,6 +393,10 @@ public class ExoPlayerController implements Player.Listener {
     }
 
     private void openMediaSource(MediaSource mediaSource) {
+        // ensure previous translation overlay doesn't leak to next video
+        if (mTranslationOverlayActive) {
+            releaseTranslationAudioPlayer();
+        }
         resetPlayerState(); // fixes occasional video artifacts and problems with quality switching
         setQualityInfo("");
 
@@ -213,8 +421,19 @@ public class ExoPlayerController implements Player.Listener {
      */
     public void setPositionMs(long positionMs) {
         // Url list videos at load stage has undefined (-1) length. So, we need to remove length check.
-        if (mPlayer != null && positionMs >= 0 && positionMs <= getDurationMs()) {
-            mPlayer.seekTo(positionMs);
+        if (mPlayer != null && positionMs >= 0) {
+            long dur = getDurationMs();
+            if (dur == -1 || positionMs <= dur) {
+                mPlayer.seekTo(positionMs);
+            } else {
+                // clamp if exceed
+                mPlayer.seekTo(dur);
+            }
+        }
+        if (mTranslationPlayer != null && mTranslationOverlayActive && positionMs >= 0) {
+            try {
+                mTranslationPlayer.seekTo(positionMs);
+            } catch (Exception e) { Log.e("VOT_SYNC", "seek fail", e); }
         }
     }
 
@@ -231,6 +450,7 @@ public class ExoPlayerController implements Player.Listener {
         if (mPlayer != null) {
             mPlayer.setPlayWhenReady(play);
         }
+        lipSync(play ? "play" : "pause");
         syncTranslationPlayWhenReady();
     }
 
@@ -409,6 +629,12 @@ public class ExoPlayerController implements Player.Listener {
         boolean isPlaybackEnded = Player.STATE_ENDED == playbackState && playWhenReady;
         boolean isBuffering = Player.STATE_BUFFERING == playbackState && playWhenReady;
 
+        // --- VOT lipSync mirror ---
+        if (isPlayPressed) lipSync("playing");
+        else if (isPausePressed) lipSync("pause");
+        else if (isPlaybackEnded) lipSync("ended");
+        else if (isBuffering) lipSync("waiting");
+
         // Fix chapters (seek and play) after playback ends
         if (isPlaybackEnded && mIsEnded) {
             return;
@@ -435,10 +661,18 @@ public class ExoPlayerController implements Player.Listener {
         // NOTE(media3): end-of-video is already handled via STATE_ENDED above.
         // The old exoplayer 'auto transition -> stop' hack causes an endless
         // restart loop on media3, so it's removed here.
+        if (reason != Player.DISCONTINUITY_REASON_AUTO_TRANSITION) {
+            lipSync("seeked");
+        }
         if (reason == Player.DISCONTINUITY_REASON_SEEK) {
             // Replaces deprecated onSeekProcessed
             mEventListener.onSeekEnd();
         }
+    }
+
+    @Override
+    public void onPlaybackParametersChanged(PlaybackParameters playbackParameters) {
+        lipSync("ratechange");
     }
 
     public float getSpeed() {
