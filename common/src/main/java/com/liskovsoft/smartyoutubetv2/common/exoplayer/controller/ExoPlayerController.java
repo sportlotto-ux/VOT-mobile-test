@@ -57,6 +57,15 @@ public class ExoPlayerController implements Player.EventListener {
     private com.google.android.exoplayer2.SimpleExoPlayer mTranslationPlayer;
     private boolean mTranslationOverlayActive;
     private float mLastUserVolume = 1.0f;
+    // adaptive ducking с мгновенным attack для поддержания разницы (vot 1.11.0 smart ducking но без задержки)
+    private android.media.audiofx.Visualizer mTranslationVisualizer;
+    private final android.os.Handler mDuckHandler = new android.os.Handler(android.os.Looper.getMainLooper());
+    private Runnable mDuckRunnable;
+    private long mLastSpeechMs = 0;
+    private boolean mIsDucked = false;
+    private static final int DUCK_RMS_THRESHOLD = 800;
+    private static final long DUCK_RELEASE_MS = 600;
+    private static final long DUCK_POLL_MS = 50;
 
     public ExoPlayerController(Context context, PlayerEventListener eventListener) {
         PlayerTweaksData playerTweaksData = PlayerTweaksData.instance(context);
@@ -165,9 +174,15 @@ public class ExoPlayerController implements Player.EventListener {
             mTranslationPlayer.seekTo(Math.max(0, pos));
             try { mTranslationPlayer.setPlaybackParameters(mPlayer.getPlaybackParameters()); } catch (Exception e) {}
             // vot.js: только события видео, без периодики - lipSync сам правит
+            // фиксированная разница сразу (решает опоздание адаптива к началу фразы) + адаптивная поддержка разницы
+            float origVolFixed = origVol * mLastUserVolume;
+            float transVolFixed = transVol * mLastUserVolume;
+            // уже сделали duck выше, теперь ставим флаг и запускаем измеритель уровня
+            mIsDucked = true;
+            mLastSpeechMs = System.currentTimeMillis();
             if (isVideoPlaying()) {
                 mTranslationPlayer.setPlayWhenReady(true);
-                android.util.Log.e("VOT_SYNC", "attach playing vPos=" + pos);
+                android.util.Log.e("VOT_SYNC", "attach playing vPos=" + pos + " duck orig=" + origVolFixed + " trans=" + transVolFixed);
             } else if (!mPlayer.getPlayWhenReady()) {
                 mTranslationPlayer.setPlayWhenReady(false);
                 android.util.Log.e("VOT_SYNC", "attach paused vPos=" + pos);
@@ -175,16 +190,77 @@ public class ExoPlayerController implements Player.EventListener {
                 mTranslationPlayer.setPlayWhenReady(false);
                 android.util.Log.e("VOT_SYNC", "attach waiting vPos=" + pos);
             }
+            startAdaptiveDucking(origVolFixed, transVolFixed);
         } catch (Exception e) { android.util.Log.e("VOT_VOL", "attach failed", e); releaseTranslationAudioPlayer(); }
     }
     private void releaseTranslationAudioPlayer() {
+        stopAdaptiveDucking();
         if (mTranslationPlayer != null) {
             try { mTranslationPlayer.stop(true); mTranslationPlayer.release(); } catch (Exception e) {}
             mTranslationPlayer = null;
         }
         mTranslationOverlayActive = false;
+        mIsDucked = false;
         if (mPlayer != null) {
             try { mPlayer.setVolume(mLastUserVolume); } catch (Exception e) {}
+        }
+    }
+    private void startAdaptiveDucking(float duckedOrigVol, float transVol) {
+        stopAdaptiveDucking();
+        try {
+            int sessionId = mTranslationPlayer != null ? mTranslationPlayer.getAudioSessionId() : 0;
+            if (sessionId == 0 || sessionId == -1) {
+                android.util.Log.e("VOT_VOL", "adaptive duck fallback: no session, keep fixed duck " + duckedOrigVol);
+                return; // fallback fixed duck уже стоит
+            }
+            mTranslationVisualizer = new android.media.audiofx.Visualizer(sessionId);
+            mTranslationVisualizer.setCaptureSize(android.media.audiofx.Visualizer.getCaptureSizeRange()[1]);
+            mTranslationVisualizer.setEnabled(true);
+        } catch (Exception e) {
+            android.util.Log.e("VOT_VOL", "Visualizer init failed, keep fixed duck", e);
+            mTranslationVisualizer = null;
+            return;
+        }
+        final float fixedDucked = duckedOrigVol;
+        final byte[] waveform = new byte[256];
+        mDuckRunnable = new Runnable() {
+            @Override public void run() {
+                if (mTranslationPlayer == null || !mTranslationOverlayActive || mTranslationVisualizer == null) return;
+                try {
+                    int res = mTranslationVisualizer.getWaveform(waveform);
+                    int rms = 0;
+                    if (res == android.media.audiofx.Visualizer.SUCCESS) {
+                        long sum = 0;
+                        for (byte b : waveform) { int v = b & 0xFF; int d = v - 128; sum += d * d; }
+                        rms = (int)Math.sqrt(sum / (double)waveform.length);
+                    }
+                    boolean hasSpeech = rms > DUCK_RMS_THRESHOLD;
+                    long now = System.currentTimeMillis();
+                    if (hasSpeech) mLastSpeechMs = now;
+                    boolean shouldDuck = hasSpeech || (now - mLastSpeechMs) < DUCK_RELEASE_MS;
+                    // поддерживаем разницу: перевод всегда 100%, оригинал 10% когда shouldDuck, иначе 100%
+                    if (shouldDuck && !mIsDucked) {
+                        mPlayer.setVolume(fixedDucked);
+                        mIsDucked = true;
+                        android.util.Log.e("VOT_VOL", "adaptive duck ON rms=" + rms + " orig=" + fixedDucked);
+                    } else if (!shouldDuck && mIsDucked) {
+                        mPlayer.setVolume(mLastUserVolume);
+                        mIsDucked = false;
+                        android.util.Log.e("VOT_VOL", "adaptive duck OFF rms=" + rms + " orig=" + mLastUserVolume);
+                    }
+                } catch (Exception e) { android.util.Log.e("VOT_VOL", "duck poll fail", e); }
+                mDuckHandler.postDelayed(this, DUCK_POLL_MS);
+            }
+        };
+        mDuckHandler.postDelayed(mDuckRunnable, DUCK_POLL_MS);
+        android.util.Log.e("VOT_VOL", "adaptive duck start threshold=" + DUCK_RMS_THRESHOLD + " release=" + DUCK_RELEASE_MS);
+    }
+    private void stopAdaptiveDucking() {
+        if (mDuckHandler != null && mDuckRunnable != null) mDuckHandler.removeCallbacks(mDuckRunnable);
+        mDuckRunnable = null;
+        if (mTranslationVisualizer != null) {
+            try { mTranslationVisualizer.setEnabled(false); mTranslationVisualizer.release(); } catch (Exception e) {}
+            mTranslationVisualizer = null;
         }
     }
     private boolean isVideoPlaying() {
