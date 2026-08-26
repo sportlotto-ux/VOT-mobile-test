@@ -29,6 +29,7 @@ import com.liskovsoft.smartyoutubetv2.common.exoplayer.selector.TrackSelectorMan
 import com.liskovsoft.smartyoutubetv2.common.exoplayer.selector.TrackSelectorUtil;
 import com.liskovsoft.smartyoutubetv2.common.exoplayer.selector.track.MediaTrack;
 import com.liskovsoft.smartyoutubetv2.common.exoplayer.selector.track.VideoTrack;
+import com.liskovsoft.smartyoutubetv2.common.exoplayer.other.VolumeBooster;
 import com.liskovsoft.smartyoutubetv2.common.exoplayer.versions.ExoUtils;
 import com.liskovsoft.smartyoutubetv2.common.prefs.PlayerData;
 import com.liskovsoft.smartyoutubetv2.common.prefs.PlayerTweaksData;
@@ -52,6 +53,8 @@ public class ExoPlayerController implements Player.Listener {
     private boolean mIsEnded;
     private Runnable mOnVideoLoaded;
     private androidx.media3.exoplayer.ExoPlayer mTranslationPlayer;
+    private VolumeBooster mTranslationBooster;
+    private float mAppliedTransBoost = -1f;
     private boolean mTranslationOverlayActive;
     private float mLastUserVolume = 1.0f;
     // --- VOT sync machinery (ported from unified bc780a9/e565caf) ---
@@ -180,6 +183,7 @@ public class ExoPlayerController implements Player.Listener {
             mTranslationPlayer.setVolume(Math.min(1.0f, transVol * mLastUserVolume));
             mTranslationPlayer.prepare(audioSource);
             mTranslationPlayer.seekTo(Math.max(0, pos));
+            applyTranslationBoost(transVol);
             try { mTranslationPlayer.setPlaybackParameters(mPlayer.getPlaybackParameters()); } catch (Exception e) {}
             mIsDucked = true;
             mLastSpeechMs = System.currentTimeMillis();
@@ -209,6 +213,12 @@ public class ExoPlayerController implements Player.Listener {
         stopPeriodicSync();
         if (mSeekHandler != null && mSeekRunnable != null) mSeekHandler.removeCallbacks(mSeekRunnable);
         mSeekRunnable = null; mPendingSeekPos = -1; mSeekInProgress = false;
+        if (mTranslationBooster != null) {
+            try { if (mTranslationPlayer != null) mTranslationPlayer.removeAnalyticsListener(mTranslationBooster); } catch (Exception e) {}
+            try { mTranslationBooster.release(); } catch (Exception e) {}
+            mTranslationBooster = null;
+        }
+        mAppliedTransBoost = -1f;
         if (mTranslationPlayer != null) {
             try { if (mTransListener != null) mTranslationPlayer.removeListener(mTransListener); } catch (Exception e) {}
             try { mTranslationPlayer.stop(); mTranslationPlayer.release(); } catch (Exception e) {}
@@ -220,6 +230,26 @@ public class ExoPlayerController implements Player.Listener {
         if (sActiveVotInstance != null && sActiveVotInstance.get() == this) sActiveVotInstance = null;
         if (mPlayer != null) {
             try { mPlayer.setVolume(mLastUserVolume); } catch (Exception e) {}
+        }
+    }
+    // Applies >100% gain (LoudnessEnhancer) to the translation player when the
+    // user sets translation volume above 100%. ExoPlayer volume itself caps at 1.0.
+    private void applyTranslationBoost(float transVol) {
+        if (mTranslationPlayer == null) return;
+        if (mAppliedTransBoost == transVol) return;
+        mAppliedTransBoost = transVol;
+        if (mTranslationBooster != null) {
+            try { mTranslationPlayer.removeAnalyticsListener(mTranslationBooster); } catch (Exception e) {}
+            try { mTranslationBooster.release(); } catch (Exception e) {}
+            mTranslationBooster = null;
+        }
+        if (transVol > 1f) {
+            mTranslationBooster = new VolumeBooster(true, transVol, mTranslationPlayer);
+            try {
+                mTranslationPlayer.addAnalyticsListener(mTranslationBooster);
+                int sessionId = mTranslationPlayer.getAudioSessionId();
+                if (sessionId != 0 && sessionId != -1) mTranslationBooster.boostSession(sessionId);
+            } catch (Exception e) { mTranslationBooster = null; }
         }
     }
     private void startAdaptiveDucking(float duckedOrigVol, float transVol) {
@@ -369,7 +399,10 @@ public class ExoPlayerController implements Player.Listener {
                 if (mIsDucked) mPlayer.setVolume(origVol * mLastUserVolume);
             }
             float tVol = Math.min(1.0f, transVol * mLastUserVolume);
-            if (mTranslationPlayer != null) mTranslationPlayer.setVolume(tVol);
+            if (mTranslationPlayer != null) {
+                mTranslationPlayer.setVolume(tVol);
+                applyTranslationBoost(transVol);
+            }
         } catch (Exception e) { Log.e("VOT_VOL", "updateVotVolumes fail", e); }
     }
     public static void updateActiveVotVolumes(Context ctx) {

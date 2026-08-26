@@ -26,6 +26,13 @@ public class VolumeBooster implements AnalyticsListener {
 
     @Override
     public void onAudioSessionIdChanged(EventTime eventTime, int audioSessionId) {
+        boostSession(audioSessionId);
+    }
+
+    // Applies the LoudnessEnhancer gain to the given audio session.
+    // Can be called directly when the session id is already known (e.g. from the
+    // translation player right after prepare), not only via the analytics callback.
+    public void boostSession(int audioSessionId) {
         if (VERSION.SDK_INT < 19 || mVolume <= 1) {
             return;
         }
