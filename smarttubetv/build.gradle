@@ -196,6 +196,7 @@ dependencies {
 
     //////// BEGIN EXOPLAYER /////////
 
+    implementation 'androidx.media3:media3-session:1.4.1'
     // TODO(media3): remove old exoplayer deps after full migration
     // implementation project(':exoplayer-library-core')
     // implementation project(':exoplayer-library-ui')

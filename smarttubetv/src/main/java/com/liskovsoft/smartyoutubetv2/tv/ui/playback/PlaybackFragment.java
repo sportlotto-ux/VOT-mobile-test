@@ -4,7 +4,6 @@ import android.media.session.PlaybackState;
 import android.os.Build.VERSION;
 import android.os.Bundle;
 import android.support.v4.media.MediaMetadataCompat;
-import android.support.v4.media.session.MediaSessionCompat;
 import android.support.v4.media.session.PlaybackStateCompat;
 import android.text.TextUtils;
 import android.view.KeyEvent;
@@ -115,7 +114,7 @@ public class PlaybackFragment extends SeekModePlaybackFragment implements Playba
     private RowsSupportFragment mRowsSupportFragment;
     private boolean mIsUIAnimationsEnabled = false;
     private boolean mIsEngineBlocked;
-    private MediaSessionCompat mMediaSession;
+    private androidx.media3.session.MediaSession mMediaSession;
     private DoubleTapPlayerAdapter mDoubleTapPlayerAdapter;
     private YouTubeOverlay mYouTubeOverlay;
     private Boolean mIsControlsShownPreviously;
@@ -607,9 +606,11 @@ public class PlaybackFragment extends SeekModePlaybackFragment implements Playba
 
         // NOTE: No way to disable only a notifications. We need to disable the media session instead.
         boolean disableNotifications = getPlayerTweaksData().isPlaybackNotificationsDisabled();
-        mMediaSession = new MediaSessionCompat(getContext().getApplicationContext(), getContext().getPackageName()); // NOTE: mem leak fix (SegmentTimelineElement)
-        mMediaSession.setActive(!disableNotifications);
-        // TODO(media3): restore media notification integration via androidx.media3.session.MediaSession
+        if (!disableNotifications) {
+            // Media3 session: syncs playback state, media buttons and (via platform) notifications
+            mMediaSession = new androidx.media3.session.MediaSession.Builder(
+                    getContext().getApplicationContext(), mPlayer).build();
+        }
     }
 
     private void initializePlayerRows() {

@@ -285,7 +285,12 @@ public class ExoPlayerController implements Player.Listener {
     public void setTrackSelector(DefaultTrackSelector trackSelector) {
         mTrackSelectorManager.setTrackSelector(trackSelector);
 
-        // TODO(media3): tunneled playback tweak (setTunnelingAudioSessionId removed in media3)
+        if (mContext != null && trackSelector != null && PlayerTweaksData.instance(mContext).isTunneledPlaybackEnabled()) {
+            // Media3 handles tunneling automatically when enabled and supported by the device/format.
+            if (android.os.Build.VERSION.SDK_INT >= 21) {
+                trackSelector.setParameters(trackSelector.buildUponParameters().setTunnelingEnabled(true));
+            }
+        }
     }
     
     public void setVideo(Video video) {
