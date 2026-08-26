@@ -412,7 +412,7 @@ public class PlaybackFragment extends SeekModePlaybackFragment implements Playba
             mRowsSupportFragment = null;
         }
         if (mMediaSession != null) {
-            mMediaSession.setActive(false);
+            // media3 MediaSession has no setActive(boolean) - release() is enough for teardown
             mMediaSession.release();
             mMediaSession = null;
         }
