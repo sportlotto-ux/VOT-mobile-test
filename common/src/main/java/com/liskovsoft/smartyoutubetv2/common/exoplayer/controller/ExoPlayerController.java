@@ -237,23 +237,13 @@ public class ExoPlayerController implements Player.EventListener {
             // listener для точного seek: ждём READY после seek, потом resume если видео играет
             mTransListener = new Player.EventListener() {
                 @Override public void onPlayerStateChanged(boolean playWhenReady, int playbackState) {
-                    if (mSeekInProgress && playbackState == Player.STATE_READY) {
+                    if (playbackState == Player.STATE_READY) {
                         long vPos = mPlayer != null ? mPlayer.getCurrentPosition() : -1;
                         long aPos = mTranslationPlayer != null ? mTranslationPlayer.getCurrentPosition() : -1;
                         long diff = Math.abs(vPos - aPos);
-                        android.util.Log.e("VOT_SYNC", "trans READY vPos=" + vPos + " aPos=" + aPos + " diff=" + diff + " pending=" + mPendingSeekPos);
-                        if (mPendingSeekPos >= 0 && Math.abs(vPos - mPendingSeekPos) < 600) {
-                            mSeekInProgress = false;
-                            mPendingSeekPos = -1;
-                            // очищаем runnable чтобы periodic мог работать
-                            if (mSeekRunnable != null) { mSeekHandler.removeCallbacks(mSeekRunnable); mSeekRunnable = null; }
-                            if (isVideoPlaying()) {
-                                mTranslationPlayer.setPlayWhenReady(true);
-                                try { mTranslationPlayer.setPlaybackParameters(mPlayer.getPlaybackParameters()); } catch (Exception e) {}
-                            }
-                        } else if (diff < 300 && mPendingSeekPos < 0) {
-                            mSeekInProgress = false;
-                        }
+                        // резюм делаем ТОЛЬКО по playing видео (commitTranslationResyncAndResume),
+                        // READY аудио не авторитетно: видео может ещё буферизоваться на новой позиции
+                        android.util.Log.e("VOT_SYNC", "trans READY vPos=" + vPos + " aPos=" + aPos + " diff=" + diff + " pending=" + mPendingSeekPos + " seekInProgress=" + mSeekInProgress);
                     }
                 }
                 @Override public void onSeekProcessed() {
@@ -352,16 +342,19 @@ public class ExoPlayerController implements Player.EventListener {
             switch (mode) {
                 case "playing":
                 case "play":
-                    // если был pending seek — не форсируем play, дождёмся READY
-                    if (mSeekInProgress) break;
                     if (isVideoPlaying()) {
-                        mTranslationPlayer.setPlayWhenReady(true);
+                        // видео реально играет: если был pending seek — коммитим резинк к текущей позиции и резюмим
+                        if (mSeekInProgress) {
+                            commitTranslationResyncAndResume();
+                        } else {
+                            mTranslationPlayer.setPlayWhenReady(true);
+                        }
                     } else if (!mPlayer.getPlayWhenReady()) {
                         mTranslationPlayer.setPlayWhenReady(false);
                     }
                     break;
                 case "seeked":
-                    // быстрый скруб: дебаунсим seek перевода 90мс, паузим перевод на время seek
+                    // быстрый скруб: позиционируем перевод по дебаунсу, резюм строго после playing видео
                     scheduleTranslationSeek(vPos);
                     break;
                 case "pause":
@@ -378,52 +371,58 @@ public class ExoPlayerController implements Player.EventListener {
     }
     private void scheduleTranslationSeek(long vPos) {
         long target = Math.max(0, vPos);
-        long aPos = mTranslationPlayer != null ? mTranslationPlayer.getCurrentPosition() : -1;
-        long diff = Math.abs(target - aPos);
         mPendingSeekPos = target;
         try { if (mTranslationPlayer != null) mTranslationPlayer.setPlayWhenReady(false); } catch (Exception e) {}
         mSeekInProgress = true;
         if (mSeekRunnable != null) mSeekHandler.removeCallbacks(mSeekRunnable);
-        // для больших прыжков (>1с) — немедленный seek, иначе дебаунс чтобы схлопнуть драги
-        long debounce = diff > 1200 ? 0 : 60;
+        // коммитим позицию перевода быстро (дебаунс схлопывает драг слайдера),
+        // но возобновляем playback ТОЛЬКО когда видео реально играет с новой позиции
         mSeekRunnable = () -> {
             long t = mPendingSeekPos;
             mSeekRunnable = null;
             try {
-                android.util.Log.e("VOT_SYNC", "doSeek target=" + t + " vPos=" + (mPlayer!=null?mPlayer.getCurrentPosition():-1) + " debounce=" + debounce);
-                if (mTranslationPlayer != null) mTranslationPlayer.seekTo(t);
-                scheduleSeekFallback(0);
+                android.util.Log.e("VOT_SYNC", "commitTransSeek target=" + t + " vPos=" + (mPlayer!=null?mPlayer.getCurrentPosition():-1));
+                if (mTranslationPlayer != null) {
+                    mTranslationPlayer.seekTo(t);
+                    try { mTranslationPlayer.setPlaybackParameters(mPlayer.getPlaybackParameters()); } catch (Exception e) {}
+                }
+                if (!isVideoPlaying()) {
+                    // видео на паузе — перевод просто спозиционирован, ждать READY нечего
+                    mSeekInProgress = false;
+                    mPendingSeekPos = -1;
+                } else {
+                    // safety: если событие playing от видео не пришло за 800мс — форсим резюм
+                    mSeekHandler.postDelayed(() -> {
+                        if (!mSeekInProgress) return;
+                        boolean vPlaying = isVideoPlaying();
+                        android.util.Log.e("VOT_SYNC", "seek safety timeout vPlaying=" + vPlaying);
+                        if (vPlaying && mTranslationPlayer != null) {
+                            long vv = Math.max(0, mPlayer.getCurrentPosition());
+                            try { mTranslationPlayer.seekTo(vv); } catch (Exception e) {}
+                            mTranslationPlayer.setPlayWhenReady(true);
+                        }
+                        mSeekInProgress = false;
+                        mPendingSeekPos = -1;
+                    }, 800);
+                }
             } catch (Exception e) { android.util.Log.e("VOT_SYNC", "schedule seek fail", e); }
         };
-        if (debounce == 0) mSeekRunnable.run();
-        else mSeekHandler.postDelayed(mSeekRunnable, debounce);
+        mSeekHandler.postDelayed(mSeekRunnable, 60);
     }
-    private void scheduleSeekFallback(int attempt) {
-        if (attempt > 4) {
-            android.util.Log.e("VOT_SYNC", "seek fallback give up");
-            mSeekInProgress = false;
-            mPendingSeekPos = -1;
-            return;
-        }
-        mSeekHandler.postDelayed(() -> {
-            if (!mSeekInProgress) return;
-            // если появился новый pending с другим target — не трогаем, дождёмся его runnable
-            long vv = mPlayer != null ? mPlayer.getCurrentPosition() : -1;
-            long aa = mTranslationPlayer != null ? mTranslationPlayer.getCurrentPosition() : -1;
-            long diff = Math.abs(vv - aa);
-            android.util.Log.e("VOT_SYNC", "seek fallback attempt=" + attempt + " diff=" + diff + " vv=" + vv + " aa=" + aa + " pending=" + mPendingSeekPos);
-            if (diff < 300) {
-                mSeekInProgress = false;
-                mPendingSeekPos = -1;
-                if (isVideoPlaying() && mTranslationPlayer != null) {
-                    try { mTranslationPlayer.setPlayWhenReady(true); mTranslationPlayer.setPlaybackParameters(mPlayer.getPlaybackParameters()); } catch (Exception e) {}
-                }
-            } else {
-                // ещё не догнали — повторный seek к актуальному vPos
-                try { if (mTranslationPlayer != null) mTranslationPlayer.seekTo(Math.max(0, vv)); mPendingSeekPos = Math.max(0, vv); } catch (Exception e) {}
-                scheduleSeekFallback(attempt + 1);
+    private void commitTranslationResyncAndResume() {
+        // авторитетная точка синка: видео подтверждённо играет с новой позиции
+        if (mSeekRunnable != null) { mSeekHandler.removeCallbacks(mSeekRunnable); mSeekRunnable = null; }
+        long vv = Math.max(0, mPlayer.getCurrentPosition());
+        android.util.Log.e("VOT_SYNC", "videoReadyCommit vPos=" + vv + " pending=" + mPendingSeekPos);
+        try {
+            if (mTranslationPlayer != null) {
+                mTranslationPlayer.seekTo(vv);
+                try { mTranslationPlayer.setPlaybackParameters(mPlayer.getPlaybackParameters()); } catch (Exception e) {}
+                mTranslationPlayer.setPlayWhenReady(true);
             }
-        }, 300);
+        } catch (Exception e) { android.util.Log.e("VOT_SYNC", "videoReadyCommit fail", e); }
+        mSeekInProgress = false;
+        mPendingSeekPos = -1;
     }
     private void startPeriodicSync() {
         stopPeriodicSync();
