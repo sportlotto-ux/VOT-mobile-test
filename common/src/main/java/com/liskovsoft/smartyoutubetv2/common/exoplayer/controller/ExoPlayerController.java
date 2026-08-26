@@ -373,6 +373,7 @@ public class ExoPlayerController implements Player.EventListener {
         if (mSeekRunnable != null) mSeekHandler.removeCallbacks(mSeekRunnable);
         // дебаунс только схлопывает драг слайдера; НЕ паузим перевод - буферизация аудио сама гейтит,
         // как audio.currentTime= в vot.user.js
+        mSeekInProgress = true;
         mSeekRunnable = () -> {
             mSeekRunnable = null;
             try {
@@ -386,6 +387,9 @@ public class ExoPlayerController implements Player.EventListener {
                     mTranslationPlayer.setPlayWhenReady(mirrorPlay);
                 }
             } catch (Exception e) { android.util.Log.e("VOT_SYNC", "schedule seek fail", e); }
+            finally {
+                mSeekInProgress = false;
+            }
         };
         mSeekHandler.postDelayed(mSeekRunnable, 60);
     }
