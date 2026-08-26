@@ -117,7 +117,7 @@ public final class VotSettings
     }
     
     public int getTranslationVolumePercent() {
-        return Math.max(50, Math.min(100, this.mPrefs.getInt("translation_volume_percent", 100)));
+        return Math.max(50, Math.min(200, this.mPrefs.getInt("translation_volume_percent", 100)));
     }
     
     public String getYandexOauthToken() {
@@ -168,7 +168,7 @@ public final class VotSettings
     }
     
     public void setTranslationVolumePercent(int max) {
-        max = Math.max(50, Math.min(100, max));
+        max = Math.max(50, Math.min(200, max));
         this.mPrefs.edit().putInt("translation_volume_percent", max).apply();
     }
     

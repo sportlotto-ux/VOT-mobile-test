@@ -641,8 +641,26 @@ public class PlayerUIController extends BasePlayerController {
             settings.setUseLivelyVoice(opt.isSelected());
             if (getController(VoiceOverTranslationController.class) != null) getController(VoiceOverTranslationController.class).requestTranslation();
         }, settings.isUseLivelyVoice()));
-        // volume categories simplified
-        dialog.appendSingleButton(UiOptionItem.from(getContext().getString(R.string.voice_over_translate_settings), opt -> dialog.showDialog(getContext().getString(R.string.voice_over_translate_settings))));
+        // регулятор оригинала 0-50% — применяется мгновенно без перезапуска
+        java.util.List<OptionItem> origOptions = new java.util.ArrayList<>();
+        for (int p : new int[]{0,2,5,8,10,15,20,30,40,50}) {
+            int val = p;
+            origOptions.add(UiOptionItem.from(getContext().getString(R.string.voice_over_translate_volume_percent, val), opt -> {
+                settings.setOriginalVolumePercent(val);
+                com.liskovsoft.smartyoutubetv2.common.exoplayer.controller.ExoPlayerController.updateActiveVotVolumes(getContext());
+            }, settings.getOriginalVolumePercent() == val));
+        }
+        dialog.appendRadioCategory(getContext().getString(R.string.voice_over_translate_original_volume), origOptions);
+        // регулятор перевода 50-200% (до +6dB буст)
+        java.util.List<OptionItem> transOptions = new java.util.ArrayList<>();
+        for (int p : new int[]{50,75,100,125,150,175,200}) {
+            int val = p;
+            transOptions.add(UiOptionItem.from(getContext().getString(R.string.voice_over_translate_volume_percent, val), opt -> {
+                settings.setTranslationVolumePercent(val);
+                com.liskovsoft.smartyoutubetv2.common.exoplayer.controller.ExoPlayerController.updateActiveVotVolumes(getContext());
+            }, settings.getTranslationVolumePercent() == val));
+        }
+        dialog.appendRadioCategory(getContext().getString(R.string.voice_over_translate_volume), transOptions);
         dialog.showDialog(getContext().getString(R.string.voice_over_translate_settings));
     }
 

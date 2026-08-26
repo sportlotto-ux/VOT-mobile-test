@@ -57,6 +57,9 @@ public class ExoPlayerController implements Player.EventListener {
     private com.google.android.exoplayer2.SimpleExoPlayer mTranslationPlayer;
     private boolean mTranslationOverlayActive;
     private float mLastUserVolume = 1.0f;
+    private float mVotOrigVol = 0.10f;
+    private float mVotTransVol = 1.0f;
+    private static java.lang.ref.WeakReference<ExoPlayerController> sActiveVotInstance;
     // adaptive ducking с мгновенным attack для поддержания разницы (vot 1.11.0 smart ducking но без задержки)
     private android.media.audiofx.Visualizer mTranslationVisualizer;
     private final android.os.Handler mDuckHandler = new android.os.Handler(android.os.Looper.getMainLooper());
@@ -67,6 +70,37 @@ public class ExoPlayerController implements Player.EventListener {
     private static final long DUCK_RELEASE_MS = 600;
     private static final long DUCK_POLL_MS = 50;
 
+    public void updateVotVolumes() {
+        if (!mTranslationOverlayActive || mPlayer == null) return;
+        try {
+            float origVol = 0.10f;
+            try { origVol = com.liskovsoft.smartyoutubetv2.common.vot.VotSettings.instance(mContext).getOriginalVolumePercent() / 100.0f; } catch (Exception e) {}
+            float transVol = 1.0f;
+            try { transVol = com.liskovsoft.smartyoutubetv2.common.vot.VotSettings.instance(mContext).getTranslationVolumePercent() / 100.0f; } catch (Exception e) {}
+            mVotOrigVol = origVol;
+            mVotTransVol = transVol;
+            boolean shouldDuck = mIsDucked || (System.currentTimeMillis() - mLastSpeechMs) < DUCK_RELEASE_MS;
+            // если адаптив выключен (нет visualizer) — сразу применяем фиксированный duck
+            float origApplied = shouldDuck ? origVol * mLastUserVolume : mLastUserVolume;
+            // если visualizer активен, его callback сам переключит, но обновляем базовый уровень для следующего ON
+            if (mTranslationVisualizer == null) {
+                mPlayer.setVolume(origApplied);
+            } else {
+                // при живом visualizer: если сейчас ducked — обновить громкость даккинга, иначе оставить userVol
+                if (mIsDucked) mPlayer.setVolume(origVol * mLastUserVolume);
+            }
+            // translation по настройке (до 200% — пока cap 1.0, буст через LoudnessEnhancer потом по необходимости)
+            float tVol = Math.min(1.0f, transVol * mLastUserVolume);
+            if (mTranslationPlayer != null) mTranslationPlayer.setVolume(tVol);
+            android.util.Log.e("VOT_VOL", "updateVotVolumes orig=" + origVol + " trans=" + transVol + " appliedOrig=" + origApplied + " ducked=" + mIsDucked);
+        } catch (Exception e) { android.util.Log.e("VOT_VOL", "updateVotVolumes fail", e); }
+    }
+    public static void updateActiveVotVolumes(Context ctx) {
+        try {
+            ExoPlayerController inst = sActiveVotInstance != null ? sActiveVotInstance.get() : null;
+            if (inst != null) inst.updateVotVolumes();
+        } catch (Exception e) {}
+    }
     public ExoPlayerController(Context context, PlayerEventListener eventListener) {
         PlayerTweaksData playerTweaksData = PlayerTweaksData.instance(context);
         mContext = context.getApplicationContext();
@@ -162,14 +196,15 @@ public class ExoPlayerController implements Player.EventListener {
             mTranslationPlayer = com.google.android.exoplayer2.ExoPlayerFactory.newSimpleInstance(mContext, new com.google.android.exoplayer2.DefaultRenderersFactory(mContext), new com.google.android.exoplayer2.trackselection.DefaultTrackSelector());
             mTranslationOverlayActive = true;
             mLastUserVolume = mPlayer.getVolume();
-            // duck original, keep translation at user volume
+            // duck original, keep translation at user volume + регулятор
             float origVol = 0.10f;
             try { origVol = com.liskovsoft.smartyoutubetv2.common.vot.VotSettings.instance(mContext).getOriginalVolumePercent() / 100.0f; } catch (Exception e) {}
             float transVol = 1.0f;
             try { transVol = com.liskovsoft.smartyoutubetv2.common.vot.VotSettings.instance(mContext).getTranslationVolumePercent() / 100.0f; } catch (Exception e) {}
-            android.util.Log.e("VOT_VOL", "attach orig=" + origVol + " trans=" + transVol + " user=" + mLastUserVolume + " -> mPlayer=" + (origVol*mLastUserVolume) + " mTrans=" + (transVol*mLastUserVolume));
+            mVotOrigVol = origVol; mVotTransVol = transVol; sActiveVotInstance = new java.lang.ref.WeakReference<>(this);
+            android.util.Log.e("VOT_VOL", "attach orig=" + origVol + " trans=" + transVol + " user=" + mLastUserVolume + " -> mPlayer=" + (origVol*mLastUserVolume) + " mTrans=" + (Math.min(1.0f, transVol*mLastUserVolume)));
             mPlayer.setVolume(origVol * mLastUserVolume);
-            mTranslationPlayer.setVolume(transVol * mLastUserVolume);
+            mTranslationPlayer.setVolume(Math.min(1.0f, transVol * mLastUserVolume));
             mTranslationPlayer.prepare(audioSource);
             mTranslationPlayer.seekTo(Math.max(0, pos));
             try { mTranslationPlayer.setPlaybackParameters(mPlayer.getPlaybackParameters()); } catch (Exception e) {}
@@ -201,13 +236,13 @@ public class ExoPlayerController implements Player.EventListener {
         }
         mTranslationOverlayActive = false;
         mIsDucked = false;
+        if (sActiveVotInstance != null && sActiveVotInstance.get() == this) sActiveVotInstance = null;
         if (mPlayer != null) {
             try { mPlayer.setVolume(mLastUserVolume); } catch (Exception e) {}
         }
     }
     private void startAdaptiveDucking(float duckedOrigVol, float transVol) {
         stopAdaptiveDucking();
-        final float fixedDucked = duckedOrigVol;
         try {
             int sessionId = mTranslationPlayer != null ? mTranslationPlayer.getAudioSessionId() : 0;
             if (sessionId == 0 || sessionId == -1) {
@@ -228,10 +263,11 @@ public class ExoPlayerController implements Player.EventListener {
                         long now = System.currentTimeMillis();
                         if (hasSpeech) mLastSpeechMs = now;
                         boolean shouldDuck = hasSpeech || (now - mLastSpeechMs) < DUCK_RELEASE_MS;
+                        float ducked = mVotOrigVol * mLastUserVolume;
                         if (shouldDuck && !mIsDucked) {
-                            mPlayer.setVolume(fixedDucked);
+                            mPlayer.setVolume(ducked);
                             mIsDucked = true;
-                            android.util.Log.e("VOT_VOL", "adaptive duck ON rms=" + rms + " orig=" + fixedDucked);
+                            android.util.Log.e("VOT_VOL", "adaptive duck ON rms=" + rms + " orig=" + ducked);
                         } else if (!shouldDuck && mIsDucked) {
                             mPlayer.setVolume(mLastUserVolume);
                             mIsDucked = false;
