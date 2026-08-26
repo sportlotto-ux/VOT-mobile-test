@@ -5,6 +5,7 @@ import android.os.Handler;
 
 import androidx.annotation.Nullable;
 import androidx.media3.common.Format;
+import androidx.media3.exoplayer.mediacodec.MediaCodecAdapter;
 import androidx.media3.exoplayer.mediacodec.MediaCodecInfo;
 import androidx.media3.exoplayer.mediacodec.MediaCodecSelector;
 import androidx.media3.exoplayer.video.MediaCodecVideoRenderer;
@@ -25,8 +26,8 @@ public class DebugInfoMediaCodecVideoRenderer extends MediaCodecVideoRenderer {
     public DebugInfoMediaCodecVideoRenderer(Context context, MediaCodecSelector mediaCodecSelector, long allowedJoiningTimeMs,
                                             boolean enableDecoderFallback, Handler eventHandler, VideoRendererEventListener eventListener,
                                             int maxDroppedFramesToNotify) {
-        super(context, mediaCodecSelector, allowedJoiningTimeMs, enableDecoderFallback, eventHandler, eventListener,
-                maxDroppedFramesToNotify);
+        super(context, MediaCodecAdapter.Factory.getDefault(context), mediaCodecSelector, allowedJoiningTimeMs,
+                enableDecoderFallback, eventHandler, eventListener, maxDroppedFramesToNotify);
     }
 
     @Override
