@@ -1,9 +1,11 @@
 package com.liskovsoft.smartyoutubetv2.common.exoplayer.versions.renderer;
 
 import android.content.Context;
-import android.media.MediaCodec;
-import android.nio.ByteBuffer;
+import androidx.media3.exoplayer.mediacodec.MediaCodecAdapter;
+
 import android.os.Handler;
+
+import java.nio.ByteBuffer;
 
 import androidx.annotation.Nullable;
 import androidx.media3.exoplayer.ExoPlaybackException;
