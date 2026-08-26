@@ -427,13 +427,10 @@ public class ExoPlayerController implements Player.Listener {
 
     @Override
     public void onPositionDiscontinuity(Player.PositionInfo oldPosition, Player.PositionInfo newPosition, int reason) {
-        Log.e(TAG, "onPositionDiscontinuity");
-
-        // Fix video loop on 480p with legacy codes enabled
-        if (reason == Player.DISCONTINUITY_REASON_AUTO_TRANSITION) {
-            mPlayer.stop();
-            mEventListener.onPlayEnd();
-        } else if (reason == Player.DISCONTINUITY_REASON_SEEK) {
+        // NOTE(media3): end-of-video is already handled via STATE_ENDED above.
+        // The old exoplayer 'auto transition -> stop' hack causes an endless
+        // restart loop on media3, so it's removed here.
+        if (reason == Player.DISCONTINUITY_REASON_SEEK) {
             // Replaces deprecated onSeekProcessed
             mEventListener.onSeekEnd();
         }

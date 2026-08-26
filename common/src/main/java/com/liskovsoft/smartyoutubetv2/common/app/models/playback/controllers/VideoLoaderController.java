@@ -297,6 +297,9 @@ public class VideoLoaderController extends BasePlayerController {
     }
 
     private void processFormatInfo(MediaItemFormatInfo formatInfo) {
+        Log.d(TAG, "processFormatInfo: dash=%s, sabr=%s, url=%s, live=%s, unplayable=%s",
+                formatInfo.containsDashFormats(), formatInfo.containsSabrFormats(),
+                formatInfo.containsUrlFormats(), formatInfo.isLive(), formatInfo.isUnplayable());
         mLastFormatInfo = formatInfo;
         PlaybackView player = getPlayer();
 

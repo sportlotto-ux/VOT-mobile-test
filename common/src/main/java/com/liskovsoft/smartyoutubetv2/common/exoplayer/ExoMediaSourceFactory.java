@@ -196,6 +196,7 @@ public class ExoMediaSourceFactory {
             return buildDashMediaSource(formatInfo);
         }
 
+        Log.d(TAG, "buildSabrMediaSource: building SABR source, formats=%s", formatInfo.getAdaptiveFormats() != null ? formatInfo.getAdaptiveFormats().size() : -1);
         SabrManifest manifest = new SabrManifest(
                 formatInfo.getVideoId(),
                 formatInfo.getServerAbrStreamingUrl(),
