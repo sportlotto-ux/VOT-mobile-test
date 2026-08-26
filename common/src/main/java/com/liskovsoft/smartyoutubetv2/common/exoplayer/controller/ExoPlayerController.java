@@ -69,6 +69,14 @@ public class ExoPlayerController implements Player.EventListener {
     private static final int DUCK_RMS_THRESHOLD = 800;
     private static final long DUCK_RELEASE_MS = 600;
     private static final long DUCK_POLL_MS = 50;
+    // точная синхронизация как vot.user.js + debounced seek для быстрого скроба
+    private final android.os.Handler mSyncHandler = new android.os.Handler(android.os.Looper.getMainLooper());
+    private Runnable mSyncRunnable;
+    private final android.os.Handler mSeekHandler = new android.os.Handler(android.os.Looper.getMainLooper());
+    private Runnable mSeekRunnable;
+    private long mPendingSeekPos = -1;
+    private boolean mSeekInProgress = false;
+    private Player.EventListener mTransListener;
 
     public void updateVotVolumes() {
         if (!mTranslationOverlayActive || mPlayer == null) return;
@@ -226,14 +234,47 @@ public class ExoPlayerController implements Player.EventListener {
                 android.util.Log.e("VOT_SYNC", "attach waiting vPos=" + pos);
             }
             startAdaptiveDucking(origVolFixed, transVolFixed);
+            // listener для точного seek: ждём READY после seek, потом resume если видео играет
+            mTransListener = new Player.EventListener() {
+                @Override public void onPlayerStateChanged(boolean playWhenReady, int playbackState) {
+                    if (mSeekInProgress && playbackState == Player.STATE_READY) {
+                        long vPos = mPlayer != null ? mPlayer.getCurrentPosition() : -1;
+                        long aPos = mTranslationPlayer != null ? mTranslationPlayer.getCurrentPosition() : -1;
+                        long diff = Math.abs(vPos - aPos);
+                        android.util.Log.e("VOT_SYNC", "trans READY vPos=" + vPos + " aPos=" + aPos + " diff=" + diff + " pending=" + mPendingSeekPos);
+                        if (mPendingSeekPos >= 0 && Math.abs(vPos - mPendingSeekPos) < 600) {
+                            // seek завершён, снимаем флаг
+                            mSeekInProgress = false;
+                            mPendingSeekPos = -1;
+                            if (isVideoPlaying()) {
+                                mTranslationPlayer.setPlayWhenReady(true);
+                                try { mTranslationPlayer.setPlaybackParameters(mPlayer.getPlaybackParameters()); } catch (Exception e) {}
+                            }
+                        } else if (diff < 450) {
+                            mSeekInProgress = false;
+                            mPendingSeekPos = -1;
+                        }
+                    }
+                }
+                @Override public void onSeekProcessed() {
+                    android.util.Log.e("VOT_SYNC", "trans onSeekProcessed");
+                }
+            };
+            try { mTranslationPlayer.addListener(mTransListener); } catch (Exception e) {}
+            startPeriodicSync();
         } catch (Exception e) { android.util.Log.e("VOT_VOL", "attach failed", e); releaseTranslationAudioPlayer(); }
     }
     private void releaseTranslationAudioPlayer() {
         stopAdaptiveDucking();
+        stopPeriodicSync();
+        if (mSeekHandler != null && mSeekRunnable != null) mSeekHandler.removeCallbacks(mSeekRunnable);
+        mSeekRunnable = null; mPendingSeekPos = -1; mSeekInProgress = false;
         if (mTranslationPlayer != null) {
+            try { if (mTransListener != null) mTranslationPlayer.removeListener(mTransListener); } catch (Exception e) {}
             try { mTranslationPlayer.stop(true); mTranslationPlayer.release(); } catch (Exception e) {}
             mTranslationPlayer = null;
         }
+        mTransListener = null;
         mTranslationOverlayActive = false;
         mIsDucked = false;
         if (sActiveVotInstance != null && sActiveVotInstance.get() == this) sActiveVotInstance = null;
@@ -297,23 +338,22 @@ public class ExoPlayerController implements Player.EventListener {
     private boolean isVideoPlaying() {
         return ExoUtils.isPlaying(mPlayer);
     }
-    // Mirrors vot.user.js chaimu/BasePlayer lipSync: sync currentTime+playbackRate + play/pause by mode
-    //vot делает audio.currentTime=video.currentTime на каждом событии, мы так же, но без агрессивного periodic seek
+    // Правильная синхронизация: vot.js lipSync + debounced seek для быстрого скроба + периодическая проверка дрифта
     private void lipSync(String mode) {
         if (mTranslationPlayer == null || !mTranslationOverlayActive || mPlayer == null) return;
         try {
             long vPos = mPlayer.getCurrentPosition();
             long aPos = mTranslationPlayer.getCurrentPosition();
             PlaybackParameters vp = mPlayer.getPlaybackParameters();
-            // сверка времени для диагностики
-            android.util.Log.e("VOT_SYNC", "VERIFY lipSync mode=" + mode + " vPos=" + vPos + " aPos=" + aPos + " diff=" + (vPos-aPos) + " playWhenReady=" + mPlayer.getPlayWhenReady() + " state=" + mPlayer.getPlaybackState() + " isPlaying=" + isVideoPlaying());
-            // sync time & rate (как в vot: if (_currentSrc) { audio.currentTime = video.currentTime; audio.playbackRate = video.playbackRate })
-            try { mTranslationPlayer.seekTo(Math.max(0, vPos)); } catch (Exception ignored) {}
+            android.util.Log.e("VOT_SYNC", "VERIFY lipSync mode=" + mode + " vPos=" + vPos + " aPos=" + aPos + " diff=" + (vPos-aPos) + " playWhenReady=" + mPlayer.getPlayWhenReady() + " state=" + mPlayer.getPlaybackState() + " isPlaying=" + isVideoPlaying() + " seekInProgress=" + mSeekInProgress);
+            // rate всегда синхроним как vot
             try { if (vp != null) mTranslationPlayer.setPlaybackParameters(vp); } catch (Exception ignored) {}
             if (mode == null) return;
             switch (mode) {
                 case "playing":
                 case "play":
+                    // если был pending seek — не форсируем play, дождёмся READY
+                    if (mSeekInProgress) break;
                     if (isVideoPlaying()) {
                         mTranslationPlayer.setPlayWhenReady(true);
                     } else if (!mPlayer.getPlayWhenReady()) {
@@ -321,23 +361,75 @@ public class ExoPlayerController implements Player.EventListener {
                     }
                     break;
                 case "seeked":
-                    if (isVideoPlaying()) {
-                        mTranslationPlayer.setPlayWhenReady(true);
-                    } else {
-                        mTranslationPlayer.setPlayWhenReady(false);
-                    }
+                    // быстрый скруб: дебаунсим seek перевода 90мс, паузим перевод на время seek
+                    scheduleTranslationSeek(vPos);
                     break;
                 case "pause":
                 case "waiting":
                 case "ended":
+                    // отменяем pending seek? нет, seek должен завершиться, но ставим паузу
                     mTranslationPlayer.setPlayWhenReady(false);
                     break;
                 case "ratechange":
-                    // already synced above
                     break;
                 default: break;
             }
         } catch (Exception e) { android.util.Log.e("VOT_SYNC", "lipSync fail mode=" + mode, e); }
+    }
+    private void scheduleTranslationSeek(long vPos) {
+        mPendingSeekPos = Math.max(0, vPos);
+        // паузим перевод на время перемотки, чтобы не играл старый кусок
+        try { if (mTranslationPlayer != null) mTranslationPlayer.setPlayWhenReady(false); } catch (Exception e) {}
+        mSeekInProgress = true;
+        if (mSeekRunnable != null) mSeekHandler.removeCallbacks(mSeekRunnable);
+        mSeekRunnable = () -> {
+            long target = mPendingSeekPos;
+            try {
+                android.util.Log.e("VOT_SYNC", "doSeek target=" + target + " vPos=" + (mPlayer!=null?mPlayer.getCurrentPosition():-1));
+                if (mTranslationPlayer != null) mTranslationPlayer.seekTo(target);
+                // если видео уже играет и seek быстро завершится — READY listener возобновит, иначе fallback через 400мс
+                mSeekHandler.postDelayed(() -> {
+                    if (!mSeekInProgress) return;
+                    long vv = mPlayer != null ? mPlayer.getCurrentPosition() : -1;
+                    long aa = mTranslationPlayer != null ? mTranslationPlayer.getCurrentPosition() : -1;
+                    long diff = Math.abs(vv - aa);
+                    android.util.Log.e("VOT_SYNC", "seek fallback check diff=" + diff);
+                    if (diff < 500) {
+                        mSeekInProgress = false;
+                        mPendingSeekPos = -1;
+                        if (isVideoPlaying() && mTranslationPlayer != null) mTranslationPlayer.setPlayWhenReady(true);
+                    } else if (mTranslationPlayer != null) {
+                        // повторный seek если всё ещё большой диф
+                        mTranslationPlayer.seekTo(vv);
+                    }
+                }, 400);
+            } catch (Exception e) { android.util.Log.e("VOT_SYNC", "schedule seek fail", e); }
+        };
+        // 90мс дебаунс: быстрый скроб слайдером генерирует десятки seeked подряд, берём последний
+        mSeekHandler.postDelayed(mSeekRunnable, 90);
+    }
+    private void startPeriodicSync() {
+        stopPeriodicSync();
+        mSyncRunnable = new Runnable() {
+            @Override public void run() {
+                if (mTranslationOverlayActive && mTranslationPlayer != null && mPlayer != null && !mSeekInProgress && isVideoPlaying()) {
+                    long vPos = mPlayer.getCurrentPosition();
+                    long aPos = mTranslationPlayer.getCurrentPosition();
+                    long diff = vPos - aPos;
+                    long adiff = Math.abs(diff);
+                    if (adiff > 450) {
+                        android.util.Log.e("VOT_SYNC", "periodic drift fix diff=" + diff + " vPos=" + vPos + " aPos=" + aPos);
+                        try { mTranslationPlayer.seekTo(Math.max(0, vPos)); } catch (Exception e) {}
+                    }
+                }
+                mSyncHandler.postDelayed(this, 1000);
+            }
+        };
+        mSyncHandler.postDelayed(mSyncRunnable, 1000);
+    }
+    private void stopPeriodicSync() {
+        if (mSyncHandler != null && mSyncRunnable != null) mSyncHandler.removeCallbacks(mSyncRunnable);
+        mSyncRunnable = null;
     }
     private void syncTranslationPlayWhenReady() {
         if (mTranslationPlayer != null && mTranslationOverlayActive && mPlayer != null) {
