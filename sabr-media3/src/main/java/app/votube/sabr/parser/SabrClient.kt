@@ -242,6 +242,13 @@ class SabrClient private constructor(
     /** Timestamp of the last seek */
     var lastSeekMs: Long? = null
 
+    /** Latest live-stream metadata received from the server. */
+    private var liveMetadata: video_streaming.LiveMetadata? = null
+
+    /** Latest server-requested playback position for live streams. */
+    var serverSeekTimeMs: Long? = null
+        private set
+
     /** Timestamp when the last request was made  */
     private var lastRequestMs: Long? = null
 
@@ -529,6 +536,41 @@ class SabrClient private constructor(
                 initializedFormats[itag] = format
             }
 
+            UMPPartId.LIVE_METADATA -> {
+                val metadata = video_streaming.LiveMetadata.parseFrom(part.data)
+                if (metadata.hasVideoId() && metadata.videoId != videoId) {
+                    throw IOException("Live metadata belongs to unexpected video ${metadata.videoId}")
+                }
+                liveMetadata = metadata
+                if (metadata.hasHeadSequenceNumber()) {
+                    initializedFormats.values.forEach { format ->
+                        if (format.endSegmentNumber < metadata.headSequenceNumber) {
+                            // Live streams do not have a fixed end. Keep the latest server head
+                            // available to the request state instead of treating it as EOS.
+                            format.downloadedSegments.keys.removeIf {
+                                it < metadata.headSequenceNumber - MAX_LIVE_BUFFERED_SEGMENTS
+                            }
+                        }
+                    }
+                }
+                Log.d(
+                    TAG,
+                    "processPart: LIVE_METADATA headSequence=${metadata.headSequenceNumber}, " +
+                        "headTimeMs=${metadata.headTimeMs}"
+                )
+            }
+
+            UMPPartId.SABR_SEEK -> {
+                val seek = video_streaming.SabrSeek.parseFrom(part.data)
+                if (!seek.hasSeekMediaTime() || !seek.hasSeekMediaTimescale() || seek.seekMediaTimescale <= 0) {
+                    throw IOException("SABR_SEEK is missing seek time or timescale")
+                }
+                serverSeekTimeMs =
+                    (seek.seekMediaTime.toDouble() / seek.seekMediaTimescale.toDouble() * 1000).toLong()
+                lastSeekMs = SystemClock.elapsedRealtime()
+                Log.i(TAG, "processPart: SABR_SEEK serverSeekTimeMs=$serverSeekTimeMs")
+            }
+
             UMPPartId.SABR_REDIRECT -> {
                 val redirect = SabrRedirect.parseFrom(part.data)
                 url = redirect.url
@@ -626,5 +668,6 @@ class SabrClient private constructor(
         private const val USER_AGENT =
             "com.google.visionos.youtube/1.02(RealityDevice14,1; U; CPU visionOS 25_6_0 like Mac OS X; GB)"
         private const val YOUTUBE_FRONTEND_URL = "https://www.youtube.com"
+        private const val MAX_LIVE_BUFFERED_SEGMENTS = 30L
     }
 }
