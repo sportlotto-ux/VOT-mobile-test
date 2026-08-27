@@ -34,7 +34,7 @@ import video_streaming.StreamerContextOuterClass.StreamerContext
 import video_streaming.StreamerContextOuterClass.StreamerContext.SabrContext
 import video_streaming.UmpPartId.UMPPartId
 import video_streaming.VideoPlaybackAbrRequestOuterClass.VideoPlaybackAbrRequest
-import java.util.Date
+import android.os.SystemClock
 import kotlin.math.max
 
 class PlaybackRequest(
@@ -359,7 +359,7 @@ class SabrClient private constructor(
             backoffTime = null
         }
 
-        val now = Date().time
+        val now = SystemClock.elapsedRealtime()
         val xtags = audioFormat?.formatId()?.xtags?.let { Xtags(it) }
 
         val playerTimeMs = playbackRequest.segmentStartTimeMs
@@ -416,7 +416,7 @@ class SabrClient private constructor(
             .post(RequestBody.create(MediaType.parse(CONTENT_TYPE), abrRequest.toByteArray()))
             .build()
 
-        lastRequestMs = Date().time
+        lastRequestMs = SystemClock.elapsedRealtime()
         val response = client.newCall(request).execute()
         response.use {
             if (!it.isSuccessful) {

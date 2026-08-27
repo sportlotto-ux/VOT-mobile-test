@@ -1,6 +1,5 @@
 package app.votube.sabr.player
 
-import android.os.SystemClock
 import androidx.media3.common.C
 import androidx.media3.common.C.TrackType
 import androidx.media3.common.Format
@@ -32,7 +31,7 @@ import app.votube.sabr.manifest.Representation
 import app.votube.sabr.manifest.SabrManifest
 import app.votube.sabr.parser.PlaybackRequest
 import app.votube.sabr.parser.SabrClient
-import java.util.Date
+import android.os.SystemClock
 
 /** A default [SabrChunkSource] implementation.  */
 @UnstableApi
@@ -111,7 +110,7 @@ class DefaultSabrChunkSource(
 
     override fun getAdjustedSeekPositionUs(positionUs: Long, seekParameters: SeekParameters): Long {
         // inform the server when we last sought to a new position
-        sabrClient.lastSeekMs = Date().time
+        sabrClient.lastSeekMs = SystemClock.elapsedRealtime()
 
         // Segments are aligned across representations, so any segment index will do.
         for (representationHolder in representationHolders) {

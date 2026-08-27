@@ -30,7 +30,7 @@ import app.votube.sabr.manifest.Representation
 import app.votube.sabr.manifest.SabrManifest
 import app.votube.sabr.parser.SabrClient
 import java.util.Arrays
-import java.util.Date
+import android.os.SystemClock
 
 /** A Sabr [MediaPeriod].  */
 @UnstableApi
@@ -134,7 +134,7 @@ class SabrMediaPeriod(
         )
 
         // inform the server about when we changed the format
-        val now = Date().time
+        val now = SystemClock.elapsedRealtime()
         sabrClient.lastManualFormatSelectionMs = now
         sabrClient.lastActionMs = now
 
