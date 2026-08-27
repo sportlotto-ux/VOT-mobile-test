@@ -480,13 +480,17 @@ class SabrClient private constructor(
                 val segment = partialSegments.remove(headerId) ?: return
                 Log.v(TAG, "processPart: Dequeuing partial segment $headerId")
 
-                val segmentLength = segment.length()
-                if (segmentLength != segment.header.contentLength.toInt()) {
+                val segmentLength = segment.length().toLong()
+                val expectedLength = segment.header.contentLength
+                // A zero content length means that the server did not provide this optional
+                // metadata. This is used by live init segments, which still contain media data.
+                if (expectedLength > 0 && segmentLength != expectedLength) {
                     Log.w(
                         TAG,
-                        "processPart: Content length mismatch for segment $headerId: expected ${segment.header.contentLength}, got $segmentLength"
+                        "processPart: Content length mismatch for segment $headerId: " +
+                            "expected $expectedLength, got $segmentLength"
                     )
-                    throw Exception("Content length mismatch")
+                    throw IOException("Content length mismatch")
                 }
 
                 val format = initializedFormats[segment.header.itag]
