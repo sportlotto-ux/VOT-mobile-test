@@ -166,17 +166,6 @@ class SabrClient private constructor(
     }
 
     private suspend fun media(playbackRequest: PlaybackRequest) {
-        val data = fetchStreamData(playbackRequest, audioFormat, videoFormat)
-        val parser = UmpParser(data)
-        while (true) {
-            val part = parser.readPart() ?: break
-            processPart(part)
-        }
-    }
-
-    private suspend fun fetchStreamData(
-        playbackRequest: PlaybackRequest, audioFormat: Representation?, videoFormat: Representation?
-    ): ByteArray {
         backoffTime?.let { delay(it.toLong()); backoffTime = null }
         val now = SystemClock.elapsedRealtime()
         val xtags = audioFormat?.formatId()?.xtags?.let { Xtags(it) }
@@ -216,7 +205,12 @@ class SabrClient private constructor(
         lastRequestMs = SystemClock.elapsedRealtime()
         client.newCall(request).execute().use { response ->
             if (!response.isSuccessful) throw IOException("HTTP request failed: ${response.code()}")
-            return response.body()?.bytes() ?: throw IOException("HTTP response has no body")
+            val body = response.body() ?: throw IOException("HTTP response has no body")
+            val reader = StreamingUmpReader(body.byteStream())
+            while (true) {
+                val part = reader.readPart() ?: break
+                processPart(part)
+            }
         }
     }
 
