@@ -115,27 +115,27 @@ public class ExoMediaSourceFactory {
     /**
      * Returns a new DataSource factory.
      *
-     * @param useBandwidthMeter Whether to set {@link #BANDWIDTH_METER} as a listener to the new
-     *                          DataSource factory.
+     * @param useBandwidthMeter Whether to attach the shared bandwidth meter to the new DataSource
+     *                          factory.
      * @return A new DataSource factory.
      */
     private DataSource.Factory buildDataSourceFactory(boolean useBandwidthMeter) {
-        DefaultBandwidthMeter bandwidthMeter = null;
-        return new DefaultDataSource.Factory(mContext, buildHttpDataSourceFactory(useBandwidthMeter))
+        DefaultBandwidthMeter bandwidthMeter = useBandwidthMeter
+                ? DefaultBandwidthMeter.getSingletonInstance(mContext)
+                : null;
+        return new DefaultDataSource.Factory(mContext, buildHttpDataSourceFactory(bandwidthMeter))
                 .setTransferListener(bandwidthMeter);
     }
 
     /**
      * Returns a new HttpDataSource factory.
      *
-     * @param useBandwidthMeter Whether to set {@link #BANDWIDTH_METER} as a listener to the new
-     *                          DataSource factory.
+     * @param bandwidthMeter Bandwidth meter to attach to the new HTTP DataSource factory, or null.
      * @return A new HttpDataSource factory.
      */
-    private HttpDataSource.Factory buildHttpDataSourceFactory(boolean useBandwidthMeter) {
+    private HttpDataSource.Factory buildHttpDataSourceFactory(DefaultBandwidthMeter bandwidthMeter) {
         PlayerTweaksData tweaksData = PlayerTweaksData.instance(mContext);
         int source = tweaksData.getPlayerDataSource();
-        DefaultBandwidthMeter bandwidthMeter = null;
         return source == PlayerTweaksData.PLAYER_DATA_SOURCE_OKHTTP ? buildOkHttpDataSourceFactory(bandwidthMeter) :
                         source == PlayerTweaksData.PLAYER_DATA_SOURCE_CRONET && CronetManager.getEngine(mContext) != null ? buildCronetDataSourceFactory(bandwidthMeter) :
                                 buildDefaultHttpDataSourceFactory(bandwidthMeter);

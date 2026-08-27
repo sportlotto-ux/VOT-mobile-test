@@ -238,10 +238,15 @@ class SabrMediaPeriod(
         for (i in selections.indices) {
             val selection = selections[i] ?: continue
             val trackGroupIndex = streamIndexToTrackGroupIndex[i]
-            val trackGroupInfo = trackGroupInfos[trackGroupIndex]
-            val representation =
-                manifest.adaptationSets[trackGroupInfo.adaptationSetIndices[0]].representations[selection.getIndexInTrackGroup(0)]
-            sabrClient.selectFormat(representation!!)
+            val trackGroupInfo = trackGroupInfos.getOrNull(trackGroupIndex)
+                ?: throw IllegalStateException("Unknown SABR track group $trackGroupIndex")
+            val representations = trackGroupInfo.adaptationSetIndices
+                .flatMap { manifest.adaptationSets[it].representations }
+                .filterNotNull()
+            val representationIndex = selection.getIndexInTrackGroup(0)
+            val representation = representations.getOrNull(representationIndex)
+                ?: throw IllegalStateException("Missing SABR representation $representationIndex")
+            sabrClient.selectFormat(representation)
 
             if (streams[i] == null) {
                 // Create new stream for selection.

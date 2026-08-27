@@ -9,6 +9,7 @@ import androidx.media3.exoplayer.DefaultRenderersFactory;
 import androidx.media3.exoplayer.ExoPlayer;
 import androidx.media3.exoplayer.trackselection.AdaptiveTrackSelection;
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector;
+import androidx.media3.exoplayer.upstream.DefaultBandwidthMeter;
 import androidx.media3.ui.AspectRatioFrameLayout;
 import androidx.media3.ui.PlayerView;
 import com.liskovsoft.mediaserviceinterfaces.data.MediaItemFormatInfo;
@@ -571,8 +572,9 @@ public class EmbedPlayerView extends PlayerView implements PlaybackView {
             return;
         }
 
-        // Use default or pass your bandwidthMeter here: bandwidthMeter = new DefaultBandwidthMeter.Builder(getContext()).build()
-        DefaultTrackSelector trackSelector = new RestoreTrackSelector(getContext(), new AdaptiveTrackSelection.Factory());
+        DefaultBandwidthMeter bandwidthMeter = DefaultBandwidthMeter.getSingletonInstance(getContext());
+        DefaultTrackSelector trackSelector = new RestoreTrackSelector(
+                getContext(), new AdaptiveTrackSelection.Factory(bandwidthMeter));
         mExoPlayerController.setTrackSelector(trackSelector);
 
         DefaultRenderersFactory renderersFactory = new CustomOverridesRenderersFactory(getContext());

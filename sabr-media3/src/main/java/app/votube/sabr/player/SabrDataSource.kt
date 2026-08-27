@@ -26,22 +26,30 @@ class SabrDataSource(
     }
 
     override fun open(dataSpec: DataSpec): Long {
-        val playbackRequest = dataSpec.customData as PlaybackRequest?
+        val playbackRequest = dataSpec.customData as? PlaybackRequest
+            ?: throw IOException("SABR data source requires PlaybackRequest")
 
         transferInitializing(dataSpec)
         transferStarted(dataSpec)
         val segment = try {
-            sabrClient.getNextSegment(playbackRequest!!)!!
+            sabrClient.getNextSegment(playbackRequest)
+                ?: throw IOException("SABR returned no segment ${playbackRequest.segment} for ${playbackRequest.format.itag}")
+        } catch (e: IOException) {
+            Log.e(
+                SabrClient::class.java.name,
+                "open: failed to get segment ${playbackRequest.segment} for ${playbackRequest.format.itag}: $e"
+            )
+            throw e
         } catch (e: Exception) {
             Log.e(
                 SabrClient::class.java.name,
-                "open: failed to get segment ${playbackRequest!!.segment} for ${playbackRequest.format.itag}: $e"
+                "open: failed to get segment ${playbackRequest.segment} for ${playbackRequest.format.itag}: $e"
             )
-            throw IOException(e)
+            throw IOException("SABR segment request failed", e)
         }
 
         data = CompositeBuffer(segment.data)
-        return data!!.remaining().toLong()
+        return data?.remaining()?.toLong() ?: 0L
     }
 
     override fun getUri(): Uri? {
@@ -61,7 +69,7 @@ class SabrDataSource(
         if (lengthToRead == 0) {
             return C.RESULT_END_OF_INPUT
         }
-        data!!.read(buffer, offset, lengthToRead)
+        data?.read(buffer, offset, lengthToRead) ?: return C.RESULT_END_OF_INPUT
         return lengthToRead
     }
 }

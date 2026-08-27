@@ -110,12 +110,17 @@ class SabrMediaSource(
 
     override fun prepareSourceInternal(mediaTransferListener: TransferListener?) {
         this.mediaTransferListener = mediaTransferListener
-        drmSessionManager.setPlayer(Looper.myLooper()!!, playerId)
+        drmSessionManager.setPlayer(
+            checkNotNull(Looper.myLooper()) { "SABR source must be prepared on a looper thread" },
+            playerId
+        )
         drmSessionManager.prepare()
         processManifest()
     }
 
-    override fun maybeThrowSourceInfoRefreshError() {}
+    override fun maybeThrowSourceInfoRefreshError() {
+        // SABR currently exposes a static timeline. Network errors are surfaced by its chunk sources.
+    }
 
     override fun createPeriod(
         id: MediaPeriodId,
