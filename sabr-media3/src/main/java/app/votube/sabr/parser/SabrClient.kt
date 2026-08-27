@@ -24,6 +24,8 @@ import video_streaming.BufferedRangeOuterClass.BufferedRange
 import video_streaming.ClientAbrStateOuterClass.ClientAbrState
 import video_streaming.FormatInitializationMetadataOuterClass.FormatInitializationMetadata
 import video_streaming.MediaHeaderOuterClass.MediaHeader
+import video_streaming.LiveMetadataOuterClass.LiveMetadata
+import video_streaming.SabrSeekOuterClass.SabrSeek
 import video_streaming.NextRequestPolicyOuterClass.NextRequestPolicy
 import video_streaming.PlaybackCookieOuterClass.PlaybackCookie
 import video_streaming.SabrContextSendingPolicyOuterClass.SabrContextSendingPolicy
@@ -243,7 +245,7 @@ class SabrClient private constructor(
     var lastSeekMs: Long? = null
 
     /** Latest live-stream metadata received from the server. */
-    private var liveMetadata: video_streaming.LiveMetadata? = null
+    private var liveMetadata: LiveMetadata? = null
 
     /** Latest server-requested playback position for live streams. */
     var serverSeekTimeMs: Long? = null
@@ -537,7 +539,7 @@ class SabrClient private constructor(
             }
 
             UMPPartId.LIVE_METADATA -> {
-                val metadata = video_streaming.LiveMetadata.parseFrom(part.data)
+                val metadata = LiveMetadata.parseFrom(part.data)
                 if (metadata.hasVideoId() && metadata.videoId != videoId) {
                     throw IOException("Live metadata belongs to unexpected video ${metadata.videoId}")
                 }
@@ -547,8 +549,8 @@ class SabrClient private constructor(
                         if (format.endSegmentNumber < metadata.headSequenceNumber) {
                             // Live streams do not have a fixed end. Keep the latest server head
                             // available to the request state instead of treating it as EOS.
-                            format.downloadedSegments.keys.removeIf {
-                                it < metadata.headSequenceNumber - MAX_LIVE_BUFFERED_SEGMENTS
+                            format.downloadedSegments.keys.removeAll { sequenceNumber ->
+                                sequenceNumber < metadata.headSequenceNumber - MAX_LIVE_BUFFERED_SEGMENTS
                             }
                         }
                     }
@@ -561,7 +563,7 @@ class SabrClient private constructor(
             }
 
             UMPPartId.SABR_SEEK -> {
-                val seek = video_streaming.SabrSeek.parseFrom(part.data)
+                val seek = SabrSeek.parseFrom(part.data)
                 if (!seek.hasSeekMediaTime() || !seek.hasSeekMediaTimescale() || seek.seekMediaTimescale <= 0) {
                     throw IOException("SABR_SEEK is missing seek time or timescale")
                 }
