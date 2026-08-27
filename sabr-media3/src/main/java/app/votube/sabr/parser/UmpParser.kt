@@ -8,6 +8,9 @@ import video_streaming.UmpPartId.UMPPartId
 class UmpParser(private var buf: ByteArray) {
     private var position = 0
 
+    /** Number of bytes consumed from the beginning of the current buffer. */
+    fun consumedBytes(): Int = position
+
     private fun readByte(): UByte? {
         if (position >= buf.size) return null
         return buf[position++].toUByte()
@@ -62,11 +65,15 @@ class UmpParser(private var buf: ByteArray) {
      * Read a single [Part].
      */
     fun readPart(): Part? {
+        val start = position
         val ty = readVarint() ?: return null
         val umpType = UMPPartId.forNumber(ty.toInt()) ?: UMPPartId.UNKNOWN
 
         val size = readVarint() ?: return null
-        val data = readBytes(size.toInt()) ?: return null
+        val data = readBytes(size.toInt()) ?: run {
+            position = start
+            return null
+        }
 
         return Part(umpType, data)
     }
