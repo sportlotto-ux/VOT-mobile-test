@@ -52,24 +52,18 @@ class SabrDataSource(
         return data?.remaining()?.toLong() ?: 0L
     }
 
-    override fun getUri(): Uri? {
-        if (data?.hasRemaining() != true) {
-            // signal that this data source failed to be opened
-            return null
-        }
-        return Uri.parse("sabr://segment")
-    }
+    override fun getUri(): Uri? = Uri.parse("sabr://segment")
 
     override fun close() {
         data = null
+        transferEnded()
     }
 
     override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
         val lengthToRead = minOf(maxOf(length, 0), data?.remaining() ?: 0)
-        if (lengthToRead == 0) {
-            return C.RESULT_END_OF_INPUT
-        }
+        if (lengthToRead == 0) return C.RESULT_END_OF_INPUT
         data?.read(buffer, offset, lengthToRead) ?: return C.RESULT_END_OF_INPUT
+        bytesTransferred(lengthToRead)
         return lengthToRead
     }
 }

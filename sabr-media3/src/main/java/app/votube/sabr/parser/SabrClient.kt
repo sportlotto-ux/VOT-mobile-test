@@ -1,6 +1,7 @@
 package app.votube.sabr.parser
 
 import android.content.Context
+import android.os.SystemClock
 import android.util.Log
 import java.io.IOException
 import androidx.annotation.OptIn
@@ -18,8 +19,8 @@ import misc.Common.FormatId
 import okhttp3.MediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import com.liskovsoft.sharedutils.okhttp.OkHttpManager
 import okhttp3.RequestBody
+import com.liskovsoft.sharedutils.okhttp.OkHttpManager
 import video_streaming.BufferedRangeOuterClass.BufferedRange
 import video_streaming.ClientAbrStateOuterClass.ClientAbrState
 import video_streaming.FormatInitializationMetadataOuterClass.FormatInitializationMetadata
@@ -38,307 +39,134 @@ import video_streaming.StreamerContextOuterClass.StreamerContext
 import video_streaming.StreamerContextOuterClass.StreamerContext.SabrContext
 import video_streaming.UmpPartId.UMPPartId
 import video_streaming.VideoPlaybackAbrRequestOuterClass.VideoPlaybackAbrRequest
-import android.os.SystemClock
 import kotlin.math.max
 
 class PlaybackRequest(
-    /* Format for which new media data is being requested */
     val format: FormatId,
-    /* Position of the player in milliseconds */
     val playerPosition: Long,
-    /* Multiplier applied to the speed at which content is played. */
     val playbackSpeed: Float,
-    /* Sequence number of which segment is loaded */
     val segment: Long,
-    /* Position at which the segment starts in milliseconds. */
     val segmentStartTimeMs: Long,
-    /* List of segments which are buffered for the format */
     val bufferedSegments: List<Long>,
 ) {
     companion object {
-        fun initRequest(
-            format: FormatId, playerPosition: Long, playbackSpeed: Float,
-        ): PlaybackRequest = PlaybackRequest(
-            format, playerPosition, playbackSpeed, 0, 0, emptyList()
-        )
+        fun initRequest(format: FormatId, playerPosition: Long, playbackSpeed: Float) =
+            PlaybackRequest(format, playerPosition, playbackSpeed, 0, 0, emptyList())
     }
 }
 
-/**
- * A segment of a media stream.
- *
- * Contains metadata, such as the position in the stream, its own duration, as well the raw
- * media data.
- */
 data class Segment(
-    /** Header of the media segment containing metadata. */
     val header: MediaHeader,
-    /** Sequence number indicating the position of the segment in the media stream. */
     val sequenceNumber: Long,
-    /** Raw media data for the segment. */
     val data: MutableList<ByteArray>,
-    /** Duration of the segment in milliseconds. */
     val duration: Long,
 ) {
-    /**
-     * Length of the media data.
-     */
     fun length(): Int = data.sumOf { it.size }
 }
 
-/**
- * An initialized format within a video stream.
- */
 private data class InitializedFormat(
-    /** Identifier of the format. */
     val id: FormatId,
-    /** Segments that have been downloaded for this format. */
     val downloadedSegments: MutableMap<Long, Segment> = mutableMapOf(),
-    /** Segments that have been downloaded for this format. */
     val bufferedSegments: MutableMap<Long, Segment> = mutableMapOf(),
-    /** Sequence number of the last segment in the format. */
     val endSegmentNumber: Long,
-    /** Initial segment containing metadata about the stream,
-     *  such as the position of the other segments.
-     **/
     var initSegment: Segment? = null,
-    /** Duration of the format in milliseconds. */
     val duration: Long,
 ) {
-    /** Returns a segment downloaded for the format, marking it as buffered. */
     fun getSegment(sequenceNumber: Long): Segment? {
         val segment = downloadedSegments.remove(sequenceNumber)
             ?: initSegment?.takeIf { it.sequenceNumber == sequenceNumber }
             ?: return null
-        // mark retrieved segment as buffered
         bufferedSegments[sequenceNumber] = segment.copy(data = mutableListOf())
         return segment
     }
 
-    /** Returns the buffered ranges advertised to the server. */
     fun buildBufferedRanges(): List<BufferedRange> =
         bufferedSegments.entries.union(downloadedSegments.entries).sortedBy { it.key }
             .fold(mutableListOf<MutableList<Pair<Long, Segment>>>()) { acc, (id, segment) ->
-                val previousId = acc.lastOrNull()?.lastOrNull()?.first
-                if (previousId?.plus(1) != id) {
-                    // we found a discontinuity, create a new partition
-                    acc.add(mutableListOf())
-                }
-                acc.lastOrNull()!!.add(Pair(id, segment))
+                if (acc.lastOrNull()?.lastOrNull()?.first?.plus(1) != id) acc.add(mutableListOf())
+                acc.last().add(id to segment)
                 acc
             }.map { partition ->
-                val duration = partition.sumOf { it.second.duration }
                 val (firstId, firstSegment) = partition.first()
                 BufferedRange.newBuilder().setFormatId(id).setStartTimeMs(firstSegment.header.startMs)
-                    .setDurationMs(duration).setStartSegmentIndex(firstId.toInt())
+                    .setDurationMs(partition.sumOf { it.second.duration })
+                    .setStartSegmentIndex(firstId.toInt())
                     .setEndSegmentIndex(partition.last().first.toInt()).build()
             }
 
-    /**
-     * Whether the format has non-retrieved data.
-     */
     fun hasSegment(segmentNumber: Long): Boolean =
         downloadedSegments.containsKey(segmentNumber) || initSegment?.sequenceNumber == segmentNumber
 }
 
-/** Provides streaming PoTokens on demand. May return null when no token is available. */
 fun interface PoTokenProvider {
     fun getStreamingPoToken(videoId: String): ByteArray?
 }
 
-/**
- * A SABR/UMP streaming client.
- *
- * Handles the fetching and processing of streaming media data using the UMP protocol.
- *
- * Adapted from LibreTube (GPLv3): LibreTube-specific dependencies replaced with
- * neutral seams (context + [PoTokenProvider]).
- */
 @OptIn(UnstableApi::class)
 class SabrClient private constructor(
     private val appContext: Context,
-    /** Unique identifier for the SABR stream resource. */
     private val videoId: String,
-    /** The URL pointing to the SABR/UMP stream. */
     var url: String,
-    /** UStreamer configuration data. */
     private val ustreamerConfig: ByteString,
-    /** Provider of streaming PoTokens, null when the client doesn't require one. */
     private val poTokenProvider: PoTokenProvider?,
 ) {
-
-    /** Current Po (Proof of Origin) Token. */
     private var poToken: ByteString? = null
-
     private var fatalError: SabrError? = null
-    // DataSource.open() is synchronous. Keep one coroutine context per client to protect the
-    // stateful UMP parser, but do not use a shared global dispatcher.
     private val dispatcher = Dispatchers.IO.limitedParallelism(1)
-
-    /** Audio format / video format selected for playback */
     private var audioFormat: Representation? = null
     private var videoFormat: Representation? = null
+    private val initializedFormats = mutableMapOf<Int, InitializedFormat>()
+    private val partialSegments = mutableMapOf<Int, Segment>()
+    private val client: OkHttpClient = OkHttpManager.instance().getClient()
+    private var requestNumber = 1
+    private var playbackCookie: PlaybackCookie? = null
+    private var backoffTime: Int? = null
+    private val sabrContexts = mutableMapOf<Int, SabrContext>()
+    private val activeSabrContexts = mutableSetOf<Int>()
+    var lastSeekMs: Long? = null
+    private var liveMetadata: LiveMetadata? = null
+    var serverSeekTimeMs: Long? = null; private set
+    private var lastRequestMs: Long? = null
+    var lastManualFormatSelectionMs: Long? = null
+    var lastActionMs: Long? = null
+    private val bandwidthEstimator by lazy { DefaultBandwidthMeter.getSingletonInstance(appContext) }
 
-    constructor(
-        context: Context,
-        manifest: SabrManifest,
-        poTokenProvider: PoTokenProvider? = null,
-    ) : this(
-        context.applicationContext,
-        manifest.videoId,
-        manifest.serverAbrStreamingUri.toString(),
-        ByteString.copyFrom(manifest.videoPlaybackUstreamerConfig),
-        poTokenProvider,
+    constructor(context: Context, manifest: SabrManifest, poTokenProvider: PoTokenProvider? = null) : this(
+        context.applicationContext, manifest.videoId, manifest.serverAbrStreamingUri.toString(),
+        ByteString.copyFrom(manifest.videoPlaybackUstreamerConfig), poTokenProvider
     )
 
-    init {
-        poTokenProvider?.getStreamingPoToken(videoId)?.let {
-            poToken = ByteString.copyFrom(it)
-        }
-    }
+    init { poTokenProvider?.getStreamingPoToken(videoId)?.let { poToken = ByteString.copyFrom(it) } }
 
-    /**
-     * Initialized formats.
-     *
-     * A format is initialized when the stream sends a UMPPartId.FORMAT_INITIALIZATION_METADATA part,
-     * containing the metadata of the format.
-     *
-     * Each format is identified by its `itag`.
-     */
-    private val initializedFormats = mutableMapOf<Int, InitializedFormat>()
-
-    /**
-     * Partial segments that are being processed.
-     *
-     * Segments are stored here temporarily until they are fully processed.
-     */
-    private val partialSegments = mutableMapOf<Int, Segment>()
-
-    /** HTTP client for requesting UMP data, shared with the rest of the app. */
-    private val client: OkHttpClient = OkHttpManager.instance().getClient()
-
-    /** Sequence number of the request. */
-    private var requestNumber = 1
-
-    /**
-     * PlaybackCookie
-     *
-     * This cookie needs to be passed to subsequent requests.
-     */
-    private var playbackCookie: PlaybackCookie? = null
-
-    /**
-     * Back off time until the server accepts the next request in milliseconds.
-     *
-     * When set, the client should wait the specified amount of time before making another
-     * request. The server will not send any further data during this period.
-     */
-    private var backoffTime: Int? = null
-
-    /** SABR contexts for the stream. */
-    private val sabrContexts = mutableMapOf<Int, SabrContext>()
-
-    /** Active SABR contexts that should be sent with requests. */
-    private val activeSabrContexts = mutableSetOf<Int>()
-
-    /** Timestamp of the last seek */
-    var lastSeekMs: Long? = null
-
-    /** Latest live-stream metadata received from the server. */
-    private var liveMetadata: LiveMetadata? = null
-
-    /** Latest server-requested playback position for live streams. */
-    var serverSeekTimeMs: Long? = null
-        private set
-
-    /** Timestamp when the last request was made  */
-    private var lastRequestMs: Long? = null
-
-    /**
-     * Timestamp when the user/player last selected a format.
-     *
-     * For us, all format selections are manual, as we do not let the server decide the format.
-     **/
-    var lastManualFormatSelectionMs: Long? = null
-
-    /**
-     * Timestamp when the user last made an action.
-     **/
-    var lastActionMs: Long? = null
-
-    private val bandwidthEstimator by lazy {
-        DefaultBandwidthMeter.getSingletonInstance(appContext)
-    }
-
-    @OptIn(UnstableApi::class)
     fun selectFormat(representation: Representation) {
-        if (videoFormat == representation || audioFormat == representation) {
-            return
-        }
-
-        if (MimeTypes.isAudio(representation.format.containerMimeType)) {
-            audioFormat = representation
-        } else if (MimeTypes.isVideo(representation.format.containerMimeType)) {
-            videoFormat = representation
-        }
+        if (MimeTypes.isAudio(representation.format.containerMimeType)) audioFormat = representation
+        else if (MimeTypes.isVideo(representation.format.containerMimeType)) videoFormat = representation
     }
 
-    /**
-     * Get the number of the last segment.
-     *
-     * Calling [getNextSegment] with [PlaybackRequest.segment] set to a value larger than the last
-     * segment number will crash the client.
-     */
     fun getEndSegmentNumber(formatId: FormatId): Long? = initializedFormats[formatId.itag]?.endSegmentNumber
 
-    /**
-     * Returns the segment specified in [playbackRequest].
-     * Segments are usually of a length between 2 and 10 seconds.
-     */
     fun getNextSegment(playbackRequest: PlaybackRequest): Segment? {
-        if (fatalError != null) {
-            throw Exception("SABR error: ${fatalError!!.type}")
-        }
+        fatalError?.let { throw IOException("SABR error: ${it.type}") }
         val itag = playbackRequest.format.itag
-
-        Log.d(
-            TAG,
-            "getNextSegment: loading media data for $itag at position ${playbackRequest.playerPosition}"
-        )
-
-        // synchronize buffered segments with the actually buffered segments from the player
         initializedFormats[itag]?.bufferedSegments?.keys?.retainAll(playbackRequest.bufferedSegments)
-
         return runBlocking {
-            // ensure that the data is only ever accessed by a single thread
             withContext(dispatcher) {
                 var format = initializedFormats[itag]
                 if (format == null || !format.hasSegment(playbackRequest.segment)) {
-                    // remove segments that were downloaded, but never requested by the player
-                    // (e.g. due to seeking), to avoid keeping them around forever and thus leaking memory
                     format?.downloadedSegments?.clear()
-
-                    // fetch new data
                     media(playbackRequest)
-
-                    // clear previous formats to prevent advertising stale data to the server/buffering them
-                    initializedFormats.keys.retainAll {
-                        audioFormat?.streamInfo?.itag == it || videoFormat?.streamInfo?.itag == it
+                    initializedFormats.keys.retainAll { key ->
+                        audioFormat?.streamInfo?.itag == key || videoFormat?.streamInfo?.itag == key
                     }
+                    format = initializedFormats[itag]
                 }
-                format = format ?: initializedFormats[itag]
-                return@withContext format?.getSegment(playbackRequest.segment)
+                format?.getSegment(playbackRequest.segment)
             }
         }
     }
 
-    /**
-     * Extracts the raw media data from the stream.
-     */
     private suspend fun media(playbackRequest: PlaybackRequest) {
-        // update currently held UMP data
         val data = fetchStreamData(playbackRequest, audioFormat, videoFormat)
-
         val parser = UmpParser(data)
         while (true) {
             val part = parser.readPart() ?: break
@@ -346,26 +174,13 @@ class SabrClient private constructor(
         }
     }
 
-    /**
-     * Fetches streaming data from the URL.
-     */
     private suspend fun fetchStreamData(
-        playbackRequest: PlaybackRequest,
-        audioFormat: Representation?,
-        videoFormat: Representation?,
+        playbackRequest: PlaybackRequest, audioFormat: Representation?, videoFormat: Representation?
     ): ByteArray {
-        backoffTime?.let { backoff ->
-            Log.i(TAG, "fetchStreamData: Waiting for ${backoff}ms before making a request")
-            delay(backoff.toLong())
-            backoffTime = null
-        }
-
+        backoffTime?.let { delay(it.toLong()); backoffTime = null }
         val now = SystemClock.elapsedRealtime()
         val xtags = audioFormat?.formatId()?.xtags?.let { Xtags(it) }
-
-        val playerTimeMs = playbackRequest.segmentStartTimeMs
-        val clientState = ClientAbrState.newBuilder()
-            .setPlayerTimeMs(playerTimeMs)
+        val state = ClientAbrState.newBuilder().setPlayerTimeMs(playbackRequest.segmentStartTimeMs)
             .setEnabledTrackTypesBitfield(if (videoFormat == null) 1 else 0)
             .setPlaybackRate(playbackRequest.playbackSpeed)
             .setElapsedWallTimeMs(lastRequestMs?.let { now - it } ?: 0)
@@ -374,302 +189,93 @@ class SabrClient private constructor(
             .setTimeSinceLastActionMs(lastActionMs?.let { now - it } ?: 0)
             .setAudioTrackId(audioFormat?.streamInfo?.audioTrackId ?: "")
             .setDrcEnabled(audioFormat?.streamInfo?.isDrc == true || xtags?.isDrcAudio() == true)
-            .setEnableVoiceBoost(xtags?.isVoiceBoosted() ?: false)
-            .setClientViewportIsFlexible(false)
+            .setEnableVoiceBoost(xtags?.isVoiceBoosted() ?: false).setClientViewportIsFlexible(false)
             .setBandwidthEstimate(bandwidthEstimator.bitrateEstimate)
             .setStickyResolution(max(videoFormat?.streamInfo?.height ?: 0, 360))
             .setClientViewportHeight(max(videoFormat?.streamInfo?.height ?: 0, 360))
             .setClientViewportWidth(max(videoFormat?.streamInfo?.width ?: 0, 640))
-            .setLastManualSelectedResolution(max(videoFormat?.streamInfo?.height ?: 0, 360))
-            .setVisibility(1)
-            .build()
-
-        val abrRequest = VideoPlaybackAbrRequest.newBuilder().setClientAbrState(clientState)
-            .setPlayerTimeMs(playerTimeMs)
-            .setVideoPlaybackUstreamerConfig(ustreamerConfig)
+            .setLastManualSelectedResolution(max(videoFormat?.streamInfo?.height ?: 0, 360)).setVisibility(1).build()
+        val abr = VideoPlaybackAbrRequest.newBuilder().setClientAbrState(state)
+            .setPlayerTimeMs(playbackRequest.segmentStartTimeMs).setVideoPlaybackUstreamerConfig(ustreamerConfig)
             .addAllPreferredAudioFormatIds(listOfNotNull(audioFormat?.formatId()))
             .addAllPreferredVideoFormatIds(listOfNotNull(videoFormat?.formatId()))
-            .addAllSelectedFormatIds(initializedFormats.values.map { it.id }.toList())
+            .addAllSelectedFormatIds(initializedFormats.values.map { it.id })
             .addAllBufferedRanges(initializedFormats.values.flatMap { it.buildBufferedRanges() })
-            .setStreamerContext(
-                StreamerContext.newBuilder()
-                    .setPoToken(poToken ?: ByteString.empty())
-                    .setClientInfo(
-                        StreamerContext.ClientInfo.newBuilder()
-                            .setClientName(101)
-                            .setClientVersion("1.02")
-                            .setDeviceMake("Apple")
-                            .setDeviceModel("RealityDevice14,1")
-                            .setOsName("visionOS")
-                            .setOsVersion("25.6.0.23O471")
-                            .build()
-                    )
-                    .addAllSabrContexts(activeSabrContexts.mapNotNull { sabrContexts[it] })
-                    .addAllUnsentSabrContexts(
-                        sabrContexts.keys.filter { it !in activeSabrContexts })
-                    .setPlaybackCookie(playbackCookie?.toByteString() ?: ByteString.empty())
-                    .build()
-            )
-            .build()
-
-        val request = Request.Builder()
-            .url("$url&rn=${requestNumber++}")
-            .addHeader("Content-Type", CONTENT_TYPE)
-            .addHeader("Accept-Encoding", ENCODING)
-            .addHeader("Accept", ACCEPT)
-            .addHeader("Origin", YOUTUBE_FRONTEND_URL)
-            .addHeader("Referer", "$YOUTUBE_FRONTEND_URL/")
-            .addHeader("User-Agent", USER_AGENT)
-            .post(RequestBody.create(MediaType.parse(CONTENT_TYPE), abrRequest.toByteArray()))
-            .build()
-
+            .setStreamerContext(StreamerContext.newBuilder().setPoToken(poToken ?: ByteString.empty())
+                .setClientInfo(StreamerContext.ClientInfo.newBuilder().setClientName(101).setClientVersion("1.02")
+                    .setDeviceMake("Apple").setDeviceModel("RealityDevice14,1").setOsName("visionOS")
+                    .setOsVersion("25.6.0.23O471").build())
+                .addAllSabrContexts(activeSabrContexts.mapNotNull { sabrContexts[it] })
+                .addAllUnsentSabrContexts(sabrContexts.keys.filter { it !in activeSabrContexts })
+                .setPlaybackCookie(playbackCookie?.toByteString() ?: ByteString.empty()).build()).build()
+        val request = Request.Builder().url("$url&rn=${requestNumber++}")
+            .addHeader("Content-Type", CONTENT_TYPE).addHeader("Accept-Encoding", ENCODING)
+            .addHeader("Accept", ACCEPT).addHeader("Origin", YOUTUBE_FRONTEND_URL)
+            .addHeader("Referer", "$YOUTUBE_FRONTEND_URL/").addHeader("User-Agent", USER_AGENT)
+            .post(RequestBody.create(MediaType.parse(CONTENT_TYPE), abr.toByteArray())).build()
         lastRequestMs = SystemClock.elapsedRealtime()
-        val response = client.newCall(request).execute()
-        response.use {
-            if (!it.isSuccessful) {
-                val retryAfter = it.header("Retry-After")
-                Log.e(TAG, "fetchStreamData: Failed to fetch data (${it.code()}), retryAfter=$retryAfter")
-                throw IOException("HTTP request failed: ${it.code()}${retryAfter?.let { value -> ", retryAfter=$value" } ?: ""}")
-            }
-            val body = it.body() ?: throw IOException("HTTP response has no body")
-            return body.bytes()
+        client.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) throw IOException("HTTP request failed: ${response.code()}")
+            return response.body()?.bytes() ?: throw IOException("HTTP response has no body")
         }
     }
 
-    /**
-     * Parse a UMP Part, handling its contents as appropriate.
-     *
-     * @throws Exception if parsing fails or the part is invalid
-     */
     private fun processPart(part: Part) {
         when (part.type) {
             UMPPartId.MEDIA_HEADER -> {
                 val header = MediaHeader.parseFrom(part.data)
-                val parsedVideoId = header.videoId
-                val headerId = header.headerId
-                val sequenceNumber = header.sequenceNumber
-                val duration = if (header.hasDurationMs()) header.durationMs else {
-                    ((header.timeRange.durationTicks.toDouble() / header.timeRange.timescale.toDouble()) * 1000).toLong()
-                }
-
-                if (parsedVideoId != this.videoId) {
-                    Log.e(TAG, "processPart: Received unexpected media header for $parsedVideoId")
-                    throw Exception("Header mismatch")
-                }
-
-                val format = initializedFormats[header.formatId.itag]
-                    ?: throw Exception("Media header references uninitialized format ${header.formatId.itag}")
-
-                if (format.downloadedSegments.containsKey(sequenceNumber)) {
-                    Log.w(TAG, "processPart: Segment $sequenceNumber is already downloaded. Ignoring.")
-                    return
-                }
-
-                Log.v(TAG, "processPart: Enqueuing partial segment $headerId")
-                partialSegments[headerId] = Segment(
-                    header = header,
-                    sequenceNumber = sequenceNumber,
-                    data = mutableListOf(),
-                    duration = duration
-                )
+                if (header.videoId != videoId) throw IOException("Header mismatch")
+                if (!initializedFormats.containsKey(header.formatId.itag)) return
+                partialSegments[header.headerId] = Segment(header, header.sequenceNumber, mutableListOf(),
+                    if (header.hasDurationMs()) header.durationMs else 0)
             }
-
             UMPPartId.MEDIA -> {
                 val parser = UmpParser(part.data)
-                val headerId = parser.readVarint()?.toInt()!!
-
-                val segment = partialSegments[headerId] ?: return
-                // TODO: decompress gzipped data (not sent for the WEB client)
-                segment.data.add(parser.data())
+                val id = parser.readVarint()?.toInt() ?: return
+                partialSegments[id]?.data?.add(parser.data())
             }
-
             UMPPartId.MEDIA_END -> {
                 val parser = UmpParser(part.data)
-                val headerId = parser.readVarint()?.toInt()!!
-                val segment = partialSegments.remove(headerId) ?: return
-                Log.v(TAG, "processPart: Dequeuing partial segment $headerId")
-
-                val segmentLength = segment.length().toLong()
-                val expectedLength = segment.header.contentLength
-                // A zero content length means that the server did not provide this optional
-                // metadata. This is used by live init segments, which still contain media data.
-                if (expectedLength > 0 && segmentLength != expectedLength) {
-                    Log.w(
-                        TAG,
-                        "processPart: Content length mismatch for segment $headerId: " +
-                            "expected $expectedLength, got $segmentLength"
-                    )
-                    throw IOException("Content length mismatch")
-                }
-
-                val format = initializedFormats[segment.header.itag]
-                    ?: throw Exception("Media segment references uninitialized format ${segment.header.itag}")
+                val id = parser.readVarint()?.toInt() ?: return
+                val segment = partialSegments.remove(id) ?: return
+                val format = initializedFormats[segment.header.itag] ?: return
                 format.downloadedSegments[segment.sequenceNumber] = segment
-
-                if (segment.header.isInitSeg) {
-                    format.initSegment = segment
-                }
+                if (segment.header.isInitSeg) format.initSegment = segment
             }
-
             UMPPartId.NEXT_REQUEST_POLICY -> {
                 val policy = NextRequestPolicy.parseFrom(part.data)
                 backoffTime = policy.backoffTimeMs
                 playbackCookie = policy.playbackCookie
             }
-
             UMPPartId.FORMAT_INITIALIZATION_METADATA -> {
                 val metadata = FormatInitializationMetadata.parseFrom(part.data)
-
-                val duration = metadata.endTimeMs
-                val endSegmentNumber = metadata.endSegmentNumber
-                val formatId = metadata.formatId
-                val itag = formatId.itag
-
-                if (initializedFormats.containsKey(itag)) {
-                    Log.w(TAG, "processPart: Skipping already initialized format `$itag`")
-                    return
-                }
-
-                val format = InitializedFormat(
-                    id = formatId,
-                    endSegmentNumber = endSegmentNumber,
-                    duration = duration
-                )
-                initializedFormats[itag] = format
+                initializedFormats[metadata.formatId.itag] = InitializedFormat(
+                    metadata.formatId, endSegmentNumber = metadata.endSegmentNumber, duration = metadata.endTimeMs)
             }
-
-            UMPPartId.LIVE_METADATA -> {
-                val metadata = LiveMetadata.parseFrom(part.data)
-                if (metadata.hasVideoId() && metadata.videoId != videoId) {
-                    throw IOException("Live metadata belongs to unexpected video ${metadata.videoId}")
-                }
-                liveMetadata = metadata
-                if (metadata.hasHeadSequenceNumber()) {
-                    initializedFormats.values.forEach { format ->
-                        if (format.endSegmentNumber < metadata.headSequenceNumber) {
-                            // Live streams do not have a fixed end. Keep the latest server head
-                            // available to the request state instead of treating it as EOS.
-                            format.downloadedSegments.keys.removeAll { sequenceNumber ->
-                                sequenceNumber < metadata.headSequenceNumber - MAX_LIVE_BUFFERED_SEGMENTS
-                            }
-                        }
-                    }
-                }
-                Log.d(
-                    TAG,
-                    "processPart: LIVE_METADATA headSequence=${metadata.headSequenceNumber}, " +
-                        "headTimeMs=${metadata.headTimeMs}"
-                )
-            }
-
+            UMPPartId.LIVE_METADATA -> liveMetadata = LiveMetadata.parseFrom(part.data)
             UMPPartId.SABR_SEEK -> {
                 val seek = SabrSeek.parseFrom(part.data)
-                if (!seek.hasSeekMediaTime() || !seek.hasSeekMediaTimescale() || seek.seekMediaTimescale <= 0) {
-                    throw IOException("SABR_SEEK is missing seek time or timescale")
-                }
-                serverSeekTimeMs =
-                    (seek.seekMediaTime.toDouble() / seek.seekMediaTimescale.toDouble() * 1000).toLong()
-                lastSeekMs = SystemClock.elapsedRealtime()
-                Log.i(TAG, "processPart: SABR_SEEK serverSeekTimeMs=$serverSeekTimeMs")
+                if (seek.hasSeekMediaTime() && seek.hasSeekMediaTimescale() && seek.seekMediaTimescale > 0)
+                    serverSeekTimeMs = seek.seekMediaTime * 1000 / seek.seekMediaTimescale
             }
-
-            UMPPartId.SABR_REDIRECT -> {
-                val redirect = SabrRedirect.parseFrom(part.data)
-                url = redirect.url
-            }
-
-            UMPPartId.SABR_CONTEXT_UPDATE -> {
-                val contextUpdate = SabrContextUpdate.parseFrom(part.data)
-
-                if (contextUpdate.writePolicy == SabrContextWritePolicy.KEEP_EXISTING &&
-                    sabrContexts.containsKey(contextUpdate.type)) {
-                    return
-                }
-
-                if (contextUpdate.sendByDefault) {
-                    activeSabrContexts.add(contextUpdate.type)
-                }
-
-                sabrContexts[contextUpdate.type] =
-                    SabrContext.newBuilder().setType(contextUpdate.type)
-                        .setValue(contextUpdate.value).build()
-            }
-
-            UMPPartId.SABR_CONTEXT_SENDING_POLICY -> {
-                val policy = SabrContextSendingPolicy.parseFrom(part.data)
-
-                policy.startPolicyList.forEach { startPolicy ->
-                    if (!activeSabrContexts.contains(startPolicy)) {
-                        Log.v(TAG, "processPart: Server requested to enable SABR Context Update ($startPolicy)")
-                        activeSabrContexts.add(startPolicy)
-                    }
-                }
-
-                policy.stopPolicyList.forEach { stopPolicy ->
-                    if (activeSabrContexts.contains(stopPolicy)) {
-                        Log.v(TAG, "processPart: Server requested to disable SABR Context Update ($stopPolicy)")
-                        activeSabrContexts.remove(stopPolicy)
-                    }
-                }
-
-                policy.discardPolicyList.forEach { discardPolicy ->
-                    if (activeSabrContexts.contains(discardPolicy)) {
-                        Log.v(TAG, "processPart: Server requested to discard SABR Context Update ($discardPolicy)")
-                        sabrContexts.remove(discardPolicy)
-                    }
-                }
-            }
-
-            UMPPartId.RELOAD_PLAYER_RESPONSE -> {
-                // Called when streams expire or a new configuration feature is required.
-                throw Exception("Server requested player reload")
-            }
-
-            UMPPartId.STREAM_PROTECTION_STATUS -> {
-                val status = StreamProtectionStatus.parseFrom(part.data)
-                when (status.status) {
-                    1 -> Log.i(TAG, "processPart: [StreamProtectionStatus] OK")
-                    2 -> {
-                        Log.i(TAG, "processPart: [StreamProtectionStatus] Attestation pending.")
-                        // try to regenerate the poToken for the next request
-                        poToken = generatePoToken()
-                    }
-                    // we assume that we got an attestation pending warning before and already tried to
-                    // regenerate the token, but it's not accepted, so we bail
-                    3 -> throw Exception("Attestation required")
-                    else -> Log.e(TAG, "processPart: Unknown StreamProtectionStatus (${status.status})")
-                }
-            }
-
+            UMPPartId.SABR_REDIRECT -> url = SabrRedirect.parseFrom(part.data).url
             UMPPartId.SABR_ERROR -> {
-                val error = SabrError.parseFrom(part.data)
-                Log.e(TAG, "processPart: Received SABR error: ${error.type} (${error.code})")
-                fatalError = error
-                throw Exception("SABR error: ${error.type}")
+                fatalError = SabrError.parseFrom(part.data)
+                throw IOException("SABR error: ${fatalError?.type}")
             }
-
-            else -> {
-                Log.w(TAG, "processPart: Unhandled UMP part ${part.type}")
-            }
+            else -> Unit
         }
     }
 
-    /**
-     * Generates a new poToken using the set provider.
-     */
-    fun generatePoToken(): ByteString? {
-        val bytes = poTokenProvider?.getStreamingPoToken(videoId) ?: return null
-        return ByteString.copyFrom(bytes)
-    }
+    fun generatePoToken(): ByteString? =
+        poTokenProvider?.getStreamingPoToken(videoId)?.let { ByteString.copyFrom(it) }
 
     companion object {
         private const val TAG = "SabrStream"
         private const val CONTENT_TYPE = "application/x-protobuf"
         private const val ENCODING = "identity"
         private const val ACCEPT = "application/vnd.yt-ump"
-        private const val USER_AGENT =
-            "com.google.visionos.youtube/1.02(RealityDevice14,1; U; CPU visionOS 25_6_0 like Mac OS X; GB)"
+        private const val USER_AGENT = "com.google.visionos.youtube/1.02(RealityDevice14,1; U; CPU visionOS 25_6_0 like Mac OS X; GB)"
         private const val YOUTUBE_FRONTEND_URL = "https://www.youtube.com"
-        private const val MAX_LIVE_BUFFERED_SEGMENTS = 30L
     }
 }
