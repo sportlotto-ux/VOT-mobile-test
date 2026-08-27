@@ -18,6 +18,7 @@ import misc.Common.FormatId
 import okhttp3.MediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import com.liskovsoft.sharedutils.okhttp.OkHttpManager
 import okhttp3.RequestBody
 import video_streaming.BufferedRangeOuterClass.BufferedRange
 import video_streaming.ClientAbrStateOuterClass.ClientAbrState
@@ -211,20 +212,8 @@ class SabrClient private constructor(
      */
     private val partialSegments = mutableMapOf<Int, Segment>()
 
-    /** HTTP Client for requesting UMP data. */
-    private val client: OkHttpClient = OkHttpClient.Builder()
-        .addInterceptor { chain ->
-            val request = chain.request().newBuilder()
-                .addHeader("Content-Type", CONTENT_TYPE)
-                .addHeader("Accept-Encoding", ENCODING)
-                .addHeader("Accept", ACCEPT)
-                .addHeader("Origin", YOUTUBE_FRONTEND_URL)
-                .addHeader("Referer", "$YOUTUBE_FRONTEND_URL/")
-                .addHeader("User-Agent", USER_AGENT)
-                .build()
-            chain.proceed(request)
-        }
-        .build()
+    /** HTTP client for requesting UMP data, shared with the rest of the app. */
+    private val client: OkHttpClient = OkHttpManager.instance().getClient()
 
     /** Sequence number of the request. */
     private var requestNumber = 1
@@ -416,6 +405,12 @@ class SabrClient private constructor(
 
         val request = Request.Builder()
             .url("$url&rn=${requestNumber++}")
+            .addHeader("Content-Type", CONTENT_TYPE)
+            .addHeader("Accept-Encoding", ENCODING)
+            .addHeader("Accept", ACCEPT)
+            .addHeader("Origin", YOUTUBE_FRONTEND_URL)
+            .addHeader("Referer", "$YOUTUBE_FRONTEND_URL/")
+            .addHeader("User-Agent", USER_AGENT)
             .post(RequestBody.create(MediaType.parse(CONTENT_TYPE), abrRequest.toByteArray()))
             .build()
 
