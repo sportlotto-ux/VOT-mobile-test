@@ -59,7 +59,7 @@ jobs:
           if-no-files-found: warn
 
       - name: Build with Gradle
-        run: ./gradlew clean assembleStbetaDebug -PuniversalOnly=true
+        run: ./gradlew clean assembleStbetaDebug -Parm64Only=true
 
       - name: VirusTotal Scan
         if: ${{ env.HAS_VT_KEY == 'true' }}
