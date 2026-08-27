@@ -158,6 +158,11 @@ class SabrMediaSource(
     }
 
     private fun processManifest() {
+        android.util.Log.i(
+            "SabrMediaSource",
+            "Preparing SABR source: videoId=${manifest.videoId}, " +
+                "adaptationSets=${manifest.adaptationSets.size}, durationMs=${manifest.durationMs}"
+        )
         val timeline =
             SabrTimeline(
                 C.TIME_UNSET,

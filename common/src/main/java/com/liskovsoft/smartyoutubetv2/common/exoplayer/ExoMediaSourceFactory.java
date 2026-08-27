@@ -190,13 +190,20 @@ public class ExoMediaSourceFactory {
     }
 
     private MediaSource buildSabrMediaSource(MediaItemFormatInfo formatInfo) {
-        if (TextUtils.isEmpty(formatInfo.getServerAbrStreamingUrl())
-                || TextUtils.isEmpty(formatInfo.getVideoPlaybackUstreamerConfig())) {
-            Log.e(TAG, "buildSabrMediaSource: SABR data is missing, falling back to DASH");
+        boolean hasSabrUrl = !TextUtils.isEmpty(formatInfo.getServerAbrStreamingUrl());
+        boolean hasSabrConfig = !TextUtils.isEmpty(formatInfo.getVideoPlaybackUstreamerConfig());
+        int adaptiveFormatCount = formatInfo.getAdaptiveFormats() != null
+                ? formatInfo.getAdaptiveFormats().size() : -1;
+
+        Log.i(TAG, "SABR selection: url=%s, config=%s, adaptiveFormats=%s",
+                hasSabrUrl, hasSabrConfig, adaptiveFormatCount);
+
+        if (!hasSabrUrl || !hasSabrConfig) {
+            Log.w(TAG, "buildSabrMediaSource: SABR data is missing, falling back to DASH");
             return buildDashMediaSource(formatInfo);
         }
 
-        Log.d(TAG, "buildSabrMediaSource: building SABR source, formats=%s", formatInfo.getAdaptiveFormats() != null ? formatInfo.getAdaptiveFormats().size() : -1);
+        Log.i(TAG, "buildSabrMediaSource: building SABR source, formats=%s", adaptiveFormatCount);
         SabrManifest manifest = new SabrManifest(
                 formatInfo.getVideoId(),
                 formatInfo.getServerAbrStreamingUrl(),

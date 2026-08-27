@@ -171,6 +171,11 @@ class DefaultSabrChunkSource(
             return
         }
 
+        android.util.Log.i(
+            "SabrChunkSource",
+            "getNextChunk: queue=${queue.size}, loadPositionUs=$loadPositionUs, " +
+                "selectedIndex=${trackSelection.selectedIndex}"
+        )
         val playbackPositionUs = loadingInfo.playbackPositionUs
         val bufferedDurationUs = loadPositionUs - playbackPositionUs
 
@@ -220,6 +225,10 @@ class DefaultSabrChunkSource(
                 )
                 .build()
 
+            android.util.Log.i(
+                "SabrChunkSource",
+                "requesting initialization: itag=${representationHolder.representation.streamInfo.itag}"
+            )
             out.chunk = InitializationChunk(
                 dataSource,
                 dataSpec,
@@ -278,6 +287,11 @@ class DefaultSabrChunkSource(
             ))
             .build()
 
+        android.util.Log.i(
+            "SabrChunkSource",
+            "requesting segment: index=$segmentNum, sabrSegment=${segmentNum + 1}, " +
+                "lastAvailable=$lastAvailableSegmentNum"
+        )
         out.chunk = ContainerMediaChunk(
             dataSource,
             dataSpec,

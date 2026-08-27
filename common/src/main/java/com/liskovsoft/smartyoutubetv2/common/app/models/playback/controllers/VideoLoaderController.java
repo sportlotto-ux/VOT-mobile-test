@@ -340,9 +340,11 @@ public class VideoLoaderController extends BasePlayerController {
             //}
         } else if (acceptAdaptiveFormats(formatInfo) && formatInfo.containsSabrFormats()) {
             Log.d(TAG, "Loading video in sabr format...");
+            MessageHelpers.showMessage(getContext(), "Playback: SABR");
             player.openSabr(formatInfo);
         } else if (acceptAdaptiveFormats(formatInfo) && formatInfo.containsDashFormats()) {
             Log.d(TAG, "Loading regular video in dash format...");
+            MessageHelpers.showMessage(getContext(), "Playback: DASH");
 
             if (getPlayerTweaksData().isHighBitrateFormatsEnabled() && formatInfo.hasExtendedHlsFormats()) {
                 player.openMerged(formatInfo, formatInfo.getHlsManifestUrl());
