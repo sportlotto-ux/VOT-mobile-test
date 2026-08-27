@@ -211,7 +211,7 @@ class DefaultSabrChunkSource(
             chunkIterators,
         )
 
-        if (representationHolder.chunkIndex == null) {
+        if (representationHolder.chunkIndex == null && queue.isEmpty()) {
             // when we request a new format, it should start with an initialization chunk
             val dataSpec = DataSpec.Builder()
                 // must be non-null, but is unused
@@ -238,6 +238,12 @@ class DefaultSabrChunkSource(
                 representationHolder.chunkExtractor
                     ?: throw IllegalStateException("SABR chunk extractor is unavailable")
             )
+            return
+        }
+
+        if (representationHolder.chunkIndex == null) {
+            // Initialization has not produced a container index yet. Do not signal EOS: the
+            // selected SABR media segment must be allowed to load and populate the extractor.
             return
         }
 
