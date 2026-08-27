@@ -313,11 +313,16 @@ class DefaultSabrChunkSource(
     override fun onChunkLoadCompleted(chunk: Chunk) {
         if (chunk is InitializationChunk) {
             val trackIndex = trackSelection.indexOf(chunk.trackFormat)
+            if (trackIndex == C.INDEX_UNSET || trackIndex !in representationHolders.indices) {
+                return
+            }
             val representationHolder = representationHolders[trackIndex]
-            if (representationHolder.chunkIndex == null) {
-                representationHolder.chunkExtractor?.chunkIndex?.let {
-                    representationHolders[trackIndex].chunkIndex = it
-                }
+            representationHolder.chunkExtractor?.chunkIndex?.let { chunkIndex ->
+                representationHolder.chunkIndex = chunkIndex
+                android.util.Log.i(
+                    "SabrChunkSource",
+                    "initialization completed: track=$trackIndex, segments=${chunkIndex.length}"
+                )
             }
         }
     }
