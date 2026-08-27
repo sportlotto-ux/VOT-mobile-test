@@ -448,7 +448,8 @@ class SabrClient private constructor(
                     throw Exception("Header mismatch")
                 }
 
-                val format = initializedFormats[header.formatId.itag]!!
+                val format = initializedFormats[header.formatId.itag]
+                    ?: throw Exception("Media header references uninitialized format ${header.formatId.itag}")
 
                 if (format.downloadedSegments.containsKey(sequenceNumber)) {
                     Log.w(TAG, "processPart: Segment $sequenceNumber is already downloaded. Ignoring.")
@@ -488,7 +489,8 @@ class SabrClient private constructor(
                     throw Exception("Content length mismatch")
                 }
 
-                val format = initializedFormats[segment.header.itag]!!
+                val format = initializedFormats[segment.header.itag]
+                    ?: throw Exception("Media segment references uninitialized format ${segment.header.itag}")
                 format.downloadedSegments[segment.sequenceNumber] = segment
 
                 if (segment.header.isInitSeg) {

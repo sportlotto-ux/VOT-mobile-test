@@ -132,7 +132,8 @@ class DefaultSabrChunkSource(
     }
 
     override fun updateTrackSelection(trackSelection: ExoTrackSelection?) {
-        this.trackSelection = trackSelection!!
+        this.trackSelection = trackSelection
+            ?: throw IllegalArgumentException("SABR track selection must not be null")
     }
 
     override fun maybeThrowError() {
@@ -225,7 +226,8 @@ class DefaultSabrChunkSource(
                 trackSelection.selectedFormat,
                 trackSelection.selectionReason,
                 trackSelection.selectionData,
-                representationHolder.chunkExtractor!!
+                representationHolder.chunkExtractor
+                    ?: throw IllegalStateException("SABR chunk extractor is unavailable")
             )
             return
         }
@@ -289,7 +291,8 @@ class DefaultSabrChunkSource(
             segmentNum,
             1,
             0,
-            representationHolder.chunkExtractor!!
+            representationHolder.chunkExtractor
+                ?: throw IllegalStateException("SABR chunk extractor is unavailable")
         )
     }
 
@@ -413,14 +416,24 @@ class DefaultSabrChunkSource(
         val segmentCount: Long
             get() = chunkIndex?.length?.toLong() ?: 0
 
-        fun getSegmentStartTimeUs(segmentNum: Long): Long = chunkIndex!!.timesUs[segmentNum.toInt()]
+        fun getSegmentStartTimeUs(segmentNum: Long): Long =
+            chunkIndex?.timesUs?.getOrNull(segmentNum.toInt())
+                ?: throw IllegalStateException("SABR segment index is unavailable: $segmentNum")
 
-        fun getSegmentEndTimeUs(segmentNum: Long): Long =
-            (getSegmentStartTimeUs(segmentNum) + chunkIndex!!.durationsUs[segmentNum.toInt()])
+        fun getSegmentEndTimeUs(segmentNum: Long): Long {
+            val index = chunkIndex
+                ?: throw IllegalStateException("SABR segment index is unavailable: $segmentNum")
+            val durationUs = index.durationsUs.getOrNull(segmentNum.toInt())
+                ?: throw IllegalStateException("SABR segment duration is unavailable: $segmentNum")
+            return getSegmentStartTimeUs(segmentNum) + durationUs
+        }
 
         fun getSegmentNum(positionUs: Long): Long =
-            chunkIndex!!.getChunkIndex(positionUs).toLong()
+            (chunkIndex ?: throw IllegalStateException("SABR segment index is unavailable"))
+                .getChunkIndex(positionUs).toLong()
 
-        fun getLastAvailableSegmentNum(): Long = chunkIndex!!.length.toLong() - 1
+        fun getLastAvailableSegmentNum(): Long =
+            (chunkIndex ?: throw IllegalStateException("SABR segment index is unavailable"))
+                .length.toLong() - 1
     }
 }
