@@ -50,6 +50,7 @@ dependencies {
     api 'androidx.media3:media3-datasource:' + media3Version
     api 'androidx.media3:media3-common:' + media3Version
 
+    implementation project(':sharedutils')
     implementation 'com.squareup.okhttp3:okhttp:' + okhttpVersion
     implementation 'com.google.protobuf:protobuf-javalite:' + protobufLiteVersion
 }
