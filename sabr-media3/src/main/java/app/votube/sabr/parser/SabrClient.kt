@@ -2,6 +2,7 @@ package app.votube.sabr.parser
 
 import android.content.Context
 import android.util.Log
+import java.io.IOException
 import androidx.annotation.OptIn
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.util.UnstableApi
@@ -167,6 +168,8 @@ class SabrClient private constructor(
     private var poToken: ByteString? = null
 
     private var fatalError: SabrError? = null
+    // DataSource.open() is synchronous. Keep one coroutine context per client to protect the
+    // stateful UMP parser, but do not use a shared global dispatcher.
     private val dispatcher = Dispatchers.IO.limitedParallelism(1)
 
     /** Audio format / video format selected for playback */
@@ -420,10 +423,12 @@ class SabrClient private constructor(
         val response = client.newCall(request).execute()
         response.use {
             if (!it.isSuccessful) {
-                Log.e(TAG, "fetchStreamData: Failed to fetch data (${it.code()})")
-                throw Exception("HTTP request failed: ${it.code()}")
+                val retryAfter = it.header("Retry-After")
+                Log.e(TAG, "fetchStreamData: Failed to fetch data (${it.code()}), retryAfter=$retryAfter")
+                throw IOException("HTTP request failed: ${it.code()}${retryAfter?.let { value -> ", retryAfter=$value" } ?: ""}")
             }
-            return it.body()!!.bytes()
+            val body = it.body() ?: throw IOException("HTTP response has no body")
+            return body.bytes()
         }
     }
 

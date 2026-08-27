@@ -327,7 +327,9 @@ class DefaultSabrChunkSource(
             val segmentCount = representationHolder.segmentCount
             if (segmentCount != 0L) {
                 val lastAvailableSegmentNum = segmentCount - 1
-                if (chunk.nextChunkIndex > lastAvailableSegmentNum) {
+                // Media3 chunk indices are zero-based, while SABR requests use segmentNum + 1.
+                // A 404 for the first unavailable segment means the period has ended.
+                if (chunk.nextChunkIndex >= lastAvailableSegmentNum) {
                     missingLastSegment = true
                     return true
                 }
