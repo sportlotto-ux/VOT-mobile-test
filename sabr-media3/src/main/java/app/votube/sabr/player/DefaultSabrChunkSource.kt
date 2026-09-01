@@ -275,9 +275,14 @@ class DefaultSabrChunkSource(
                 // Слушаем голову эфира: для live edge берём headSeq, для DVR rewind — проверяем пройденное время
                 // SABR_SEEK обрабатываем только на seek/initial (когда queue пуст), иначе последовательные сегменты идут по порядку
                 if (previousChunk == null) {
-                    val serverSeekMs = sabrClient.peekServerSeekMs()
+                    val rawSeek = sabrClient.peekServerSeekMs()
                     val targetMs = Util.usToMs(loadPositionUs)
-                    val isInitialEdge = !sabrClient.hasStartedLive && headSeq != null && headSeq > 100 && targetMs < 1000 && (headTimeMs ?: 0L) > 60_000
+                    val headIsBig = (headTimeMs ?: 0L) > 60_000
+                    // Нулевой SABR_SEEK в середине большого live — мусор (init-позиция сервера), а не реальная
+                    // команда перемотки. Иначе он перебивает реальную позицию (запуск/переключение трека/реконнект)
+                    // и мы тянем середину или начало вместо нужного места. Ненулевой seek — реальная команда.
+                    val serverSeekMs = rawSeek?.takeIf { it != 0L || !headIsBig }
+                    val isInitialEdge = !sabrClient.hasStartedLive && headSeq != null && headSeq > 100 && targetMs < 1000 && headIsBig
                     // Причина проблемы pXBfmgk9lSU: сервер после init шлёт seek=0 (начало), а голова 1153 (2300с) —
                     // если слушаем seek=0, просим середину (692) вместо края, получаем 1,2,3 и петлю no segment 693.
                     // Для live edge игнорируем seek=0 и берём голову.
@@ -286,10 +291,10 @@ class DefaultSabrChunkSource(
                         segmentNum = headSeq!!
                         requestedTimeMs = (headTimeMs ?: 0L) - 15000 // 15с до головы — стабильно как в браузере
                         sabrClient.hasStartedLive = true
-                        android.util.Log.i("SabrChunkSource", "live initial head (ignore seek): headSeq=$headSeq headTimeMs=$headTimeMs seekMs=$serverSeekMs -> segmentNum=$segmentNum requestedTimeMs=$requestedTimeMs")
+                        android.util.Log.i("SabrChunkSource", "live initial head (ignore seek): headSeq=$headSeq headTimeMs=$headTimeMs seekMs=$rawSeek -> segmentNum=$segmentNum requestedTimeMs=$requestedTimeMs")
                     } else if (serverSeekMs != null) {
                         sabrClient.consumeServerSeekMs()
-                        // Сервер сказал куда мотать — берём отрезок по времени seek, чтобы вернуться к началу или к голове
+                        // Сервер сказал куда мотать (ненулевой seek) — берём отрезок по времени seek
                         requestedTimeMs = serverSeekMs
                         val estDurationMs = if (representationHolder.lastSegmentDurationUs > 0) representationHolder.lastSegmentDurationUs / 1000 else 5000L
                         if (headSeq != null && headTimeMs != null) {
@@ -299,7 +304,8 @@ class DefaultSabrChunkSource(
                         }
                         android.util.Log.i("SabrChunkSource", "live serverSeek (initial/seek): seekMs=$serverSeekMs headSeq=$headSeq headTimeMs=$headTimeMs -> segmentNum=$segmentNum requestedTimeMs=$requestedTimeMs")
                     } else {
-                        // DVR: уже не initial edge и нет serverSeek — считаем по окну (loadPosition 0 => начало, windowDuration => голова)
+                        sabrClient.consumeServerSeekMs() // чистим мусорный seek 0, идём по реальной позиции
+                        // DVR: уже не initial edge и нет seek — считаем по окну (loadPosition 0 => начало, windowDuration => голова)
                         if (headSeq != null && headTimeMs != null && minSeekMs != null) {
                         val windowDurationMs = sabrClient.getLiveWindowDurationMs() ?: (headTimeMs - minSeekMs)
                         // DVR: loadPosition 0 => minSeek (начало), loadPosition windowDuration => head (край)
