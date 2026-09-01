@@ -116,6 +116,9 @@ class SabrMediaSource(
 
     override fun prepareSourceInternal(mediaTransferListener: TransferListener?) {
         this.mediaTransferListener = mediaTransferListener
+        // Каждый (ре)prepare = новый старт: если плеер начал с позиции 0 — стартуем с головы,
+        // а не с середины из-за stale serverSeek=0 (pXBfmgk9lSU)
+        sabrClient.hasStartedLive = false
         drmSessionManager.setPlayer(
             checkNotNull(Looper.myLooper()) { "SABR source must be prepared on a looper thread" },
             playerId

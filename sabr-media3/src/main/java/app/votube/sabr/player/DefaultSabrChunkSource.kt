@@ -269,7 +269,7 @@ class DefaultSabrChunkSource(
                 if (previousChunk == null) {
                     val serverSeekMs = sabrClient.peekServerSeekMs()
                     val targetMs = Util.usToMs(loadPositionUs)
-                    val isInitialEdge = headSeq != null && headSeq > 100 && targetMs < 1000 && (headTimeMs ?: 0L) > 60_000
+                    val isInitialEdge = !sabrClient.hasStartedLive && headSeq != null && headSeq > 100 && targetMs < 1000 && (headTimeMs ?: 0L) > 60_000
                     // Причина проблемы pXBfmgk9lSU: сервер после init шлёт seek=0 (начало), а голова 1153 (2300с) —
                     // если слушаем seek=0, просим середину (692) вместо края, получаем 1,2,3 и петлю no segment 693.
                     // Для live edge игнорируем seek=0 и берём голову.
