@@ -87,6 +87,8 @@ class DefaultSabrChunkSource(
     private var fatalError: Exception? = null
     private var missingLastSegment = false
     private val isLive = manifest.durationMs == C.TIME_UNSET
+    private var lastTrackSwitchMs: Long = 0L
+    private var lastSelectedTrackIndex: Int = C.INDEX_UNSET
 
     init {
         val representations =
@@ -207,13 +209,38 @@ class DefaultSabrChunkSource(
         // changing the format on the next selection, ensuring there is some data already buffered.
         val representationHolder = representationHolders[trackSelection.selectedIndex]
         sabrClient.selectFormat(representationHolder.representation)
-        trackSelection.updateSelectedTrack(
-            playbackPositionUs,
-            bufferedDurationUs,
-            C.TIME_UNSET,
-            queue,
-            chunkIterators,
-        )
+        // Hysteresis for live ABR: avoid spiral downgrades when readahead dips transiently
+        // (segment mismatch, multiplexed response delay). Suppress rapid successive switches
+        // unless buffer is critically low — mirrors browser client's hysteresis.
+        val nowMs = SystemClock.elapsedRealtime()
+        val timeSinceSwitchMs = nowMs - lastTrackSwitchMs
+        val bufferedMs = Util.usToMs(bufferedDurationUs)
+        val isRecentlySwitched = lastTrackSwitchMs != 0L && timeSinceSwitchMs < 10_000
+        val minReadaheadMs = sabrClient.getMinReadaheadMs(representationHolder.representation) ?: 2_000
+        val isBufferCritical = bufferedMs < minReadaheadMs || queue.isEmpty()
+        val beforeIndex = trackSelection.selectedIndex
+        if (isLive && isRecentlySwitched && !isBufferCritical && queue.size >= 2) {
+            android.util.Log.i(
+                "SabrChunkSource",
+                "ABR hysteresis: suppress switch (recent ${timeSinceSwitchMs}ms ago, buf=${bufferedMs}ms, queue=${queue.size})"
+            )
+        } else {
+            trackSelection.updateSelectedTrack(
+                playbackPositionUs,
+                bufferedDurationUs,
+                C.TIME_UNSET,
+                queue,
+                chunkIterators,
+            )
+            if (trackSelection.selectedIndex != beforeIndex) {
+                lastTrackSwitchMs = nowMs
+                lastSelectedTrackIndex = trackSelection.selectedIndex
+                android.util.Log.i(
+                    "SabrChunkSource",
+                    "ABR switch: $beforeIndex -> ${trackSelection.selectedIndex} (buf=${bufferedMs}ms)"
+                )
+            }
+        }
 
         if (representationHolder.chunkIndex == null) {
             // SABR is server-driven: the container index is only built once media fragments

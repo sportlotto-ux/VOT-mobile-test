@@ -136,6 +136,8 @@ class SabrClient private constructor(
     /** sequence последнего реально отданного сервером сегмента по itag — чтобы следующий запрос
      *  шёл от реальной нумерации сервера, а не от локально посчитанного индекса (нормализация по времени) */
     private val lastReturnedSequenceByItag = mutableMapOf<Int, Long>()
+    /** last use timestamp per itag — to avoid churn when ABR oscillates (keep recent formats) */
+    private val lastFormatUseMs = mutableMapOf<Int, Long>()
     /** флаг что live уже стартовал с головы — нужен чтобы отличить начальный edge от DVR rewind к началу */
     var hasStartedLive: Boolean = false
     private var lastRequestMs: Long? = null
@@ -168,6 +170,7 @@ class SabrClient private constructor(
             }
             videoFormat = representation
         }
+        lastFormatUseMs[representation.streamInfo.itag] = SystemClock.elapsedRealtime()
     }
 
     fun getEndSegmentNumber(formatId: FormatId): Long? = initializedFormats[formatId.itag]?.endSegmentNumber
@@ -233,6 +236,7 @@ class SabrClient private constructor(
     fun getNextSegment(playbackRequest: PlaybackRequest): Segment? {
         fatalError?.let { throw IOException("SABR error: ${it.type}") }
         val itag = playbackRequest.format.itag
+        lastFormatUseMs[itag] = SystemClock.elapsedRealtime()
         initializedFormats[itag]?.bufferedSegments?.keys?.retainAll(playbackRequest.bufferedSegments)
         Log.i(TAG, "getNextSegment: itag=$itag, requested=${playbackRequest.segment}, live=${liveMetadata != null}, initFormats=${initializedFormats.keys}, hasFormat=${initializedFormats.containsKey(itag)}")
         val result = runBlocking {
@@ -243,8 +247,15 @@ class SabrClient private constructor(
                         if (attempt > 0) delay(LIVE_RETRY_DELAY_MS)
                         Log.i(TAG, "media request: attempt=$attempt, itag=$itag, segment=${playbackRequest.segment}, playerTimeMs=${playbackRequest.segmentStartTimeMs}")
                         media(playbackRequest)
+                        // Retain selected + any format that still holds data or was used recently (30s)
+                        // — avoids churn when ABR oscillates and lets multiplexed responses reuse
+                        // already-downloaded segments for the other track without re-fetch.
+                        val nowMs = SystemClock.elapsedRealtime()
                         initializedFormats.keys.retainAll { key ->
-                            audioFormat?.streamInfo?.itag == key || videoFormat?.streamInfo?.itag == key
+                            key == audioFormat?.streamInfo?.itag || key == videoFormat?.streamInfo?.itag ||
+                                initializedFormats[key]?.let { it.downloadedSegments.isNotEmpty() || it.bufferedSegments.isNotEmpty() } == true ||
+                                pendingSegments.containsKey(key) ||
+                                (lastFormatUseMs[key]?.let { nowMs - it < 30_000 } == true)
                         }
                         format = initializedFormats[itag]
                         Log.i(TAG, "after media: initFormats=${initializedFormats.keys}, hasSegment=${format?.hasSegment(playbackRequest.segment)}, downloaded=${format?.downloadedSegments?.keys?.sorted()}, pending=${pendingSegments[itag]?.size}, partial=${partialSegments.size}, endSegment=${format?.endSegmentNumber}")
@@ -420,6 +431,7 @@ class SabrClient private constructor(
                     duration = metadata.endTimeMs,
                 )
                 initializedFormats[metadata.formatId.itag] = format
+                lastFormatUseMs[metadata.formatId.itag] = SystemClock.elapsedRealtime()
                 val pending = pendingSegments.remove(metadata.formatId.itag)
                 if (pending != null) {
                     Log.i(TAG, "flushing ${pending.size} pending segments for itag=${metadata.formatId.itag}")
@@ -487,6 +499,7 @@ class SabrClient private constructor(
     private fun storeSegment(format: InitializedFormat, segment: Segment) {
         format.downloadedSegments[segment.sequenceNumber] = segment
         if (segment.header.isInitSeg) format.initSegment = segment
+        lastFormatUseMs[segment.header.itag] = SystemClock.elapsedRealtime()
         Log.i(TAG, "media segment stored: itag=${segment.header.itag}, " +
             "sequence=${segment.sequenceNumber}, init=${segment.header.isInitSeg}, bytes=${segment.length()}")
     }
