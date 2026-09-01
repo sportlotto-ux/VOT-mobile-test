@@ -28,6 +28,7 @@ import video_streaming.MediaHeaderOuterClass.MediaHeader
 import video_streaming.LiveMetadataOuterClass.LiveMetadata
 import video_streaming.SabrSeekOuterClass.SabrSeek
 import video_streaming.NextRequestPolicyOuterClass.NextRequestPolicy
+import video_streaming.PlaybackStartPolicyOuterClass.PlaybackStartPolicy
 import video_streaming.PlaybackCookieOuterClass.PlaybackCookie
 import video_streaming.SabrContextSendingPolicyOuterClass.SabrContextSendingPolicy
 import video_streaming.SabrContextUpdateOuterClass.SabrContextUpdate
@@ -129,6 +130,9 @@ class SabrClient private constructor(
     private var lastRequestMs: Long? = null
     var lastManualFormatSelectionMs: Long? = null
     var lastActionMs: Long? = null
+    /** Latest server playback-start policy, used by the player to choose readahead targets. */
+    var playbackStartPolicy: PlaybackStartPolicy? = null
+        private set
     private val bandwidthEstimator by lazy { DefaultBandwidthMeter.getSingletonInstance(appContext) }
 
     constructor(context: Context, manifest: SabrManifest, poTokenProvider: PoTokenProvider? = null) : this(
@@ -240,6 +244,12 @@ class SabrClient private constructor(
                 val policy = NextRequestPolicy.parseFrom(part.data)
                 backoffTime = policy.backoffTimeMs
                 playbackCookie = policy.playbackCookie
+            }
+            UMPPartId.PLAYBACK_START_POLICY -> {
+                // This policy is advisory: it tells the client how much data should be
+                // available before starting or resuming playback. Keep it in session state;
+                // the media3 loader remains responsible for actual buffering.
+                playbackStartPolicy = PlaybackStartPolicy.parseFrom(part.data)
             }
             UMPPartId.FORMAT_INITIALIZATION_METADATA -> {
                 val metadata = FormatInitializationMetadata.parseFrom(part.data)

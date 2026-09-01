@@ -4,6 +4,7 @@ import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
+import video_streaming.PlaybackStartPolicyOuterClass.PlaybackStartPolicy
 import video_streaming.UmpPartId.UMPPartId
 
 class UmpParserTest {
@@ -17,6 +18,28 @@ class UmpParserTest {
         for (value in values) {
             assertEquals("value=$value", value, UmpParser(encodeVarint(value)).readVarint())
         }
+    }
+
+    @Test
+    fun `readPart preserves playback start policy payload`() {
+        val policy = PlaybackStartPolicy.newBuilder()
+            .setStartMinReadaheadPolicy(
+                PlaybackStartPolicy.ReadaheadPolicy.newBuilder()
+                    .setMinReadaheadMs(1500)
+                    .setMinBandwidthBytesPerSec(128000)
+            )
+            .setResumeMinReadaheadPolicy(
+                PlaybackStartPolicy.ReadaheadPolicy.newBuilder()
+                    .setMinReadaheadMs(500)
+            )
+            .build()
+        val part = UmpParser(encodePart(UMPPartId.PLAYBACK_START_POLICY, policy.toByteArray())).readPart()
+        val decoded = PlaybackStartPolicy.parseFrom(part?.data)
+
+        assertEquals(UMPPartId.PLAYBACK_START_POLICY, part?.type)
+        assertEquals(1500, decoded.startMinReadaheadPolicy.minReadaheadMs)
+        assertEquals(128000, decoded.startMinReadaheadPolicy.minBandwidthBytesPerSec)
+        assertEquals(500, decoded.resumeMinReadaheadPolicy.minReadaheadMs)
     }
 
     @Test
