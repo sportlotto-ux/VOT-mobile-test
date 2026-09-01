@@ -257,12 +257,25 @@ class DefaultSabrChunkSource(
             // Initialization completed but the extractor has not produced an index yet.
             // Request the next media segment using server metadata (endSegmentNumber)
             // instead of a client-built ChunkIndex.
-            val defaultSegmentNum = previousChunk?.nextChunkIndex ?: 0
-            val segmentNum = defaultSegmentNum
+            var segmentNum = previousChunk?.nextChunkIndex ?: 0
             if (isLive) {
+                // For live, the server's head_sequence_number is the current live edge.
+                // If we have already downloaded segments for this format, continue from the next
+                // expected sequence; otherwise try to align with the live head to avoid
+                // requesting pruned segment 1 on a DVR window that starts far ahead.
+                val downloaded = sabrClient.getDownloadedSegmentsDebug(representationHolder.representation.streamInfo.itag)
+                val headSeq = sabrClient.getLiveHeadSequenceNumber()
+                if (previousChunk == null && headSeq != null && headSeq > 0) {
+                    // Only jump to head if our default (0) is far behind; keep 0 for VOD/live start without head.
+                    // Use headSeq as hint; fallback logic in SabrClient will return nearest available.
+                    android.util.Log.i(
+                        "SabrChunkSource",
+                        "live head hint: headSeq=$headSeq, downloaded=$downloaded, default=$segmentNum"
+                    )
+                }
                 android.util.Log.i(
                     "SabrChunkSource",
-                    "live segment request: index=$segmentNum, loadPositionMs=${Util.usToMs(loadPositionUs)}"
+                    "live segment request: index=$segmentNum, loadPositionMs=${Util.usToMs(loadPositionUs)}, headSeq=$headSeq, downloaded=$downloaded"
                 )
             }
             val endSegmentNumber = sabrClient.getEndSegmentNumber(

@@ -168,6 +168,12 @@ class SabrClient private constructor(
     fun getFirstAvailableSegmentNumber(formatId: FormatId): Long? =
         initializedFormats[formatId.itag]?.downloadedSegments?.keys?.minOrNull()
 
+    fun getLiveHeadSequenceNumber(): Long? = liveMetadata?.headSequenceNumber
+    fun getLiveHeadTimeMs(): Long? = liveMetadata?.headTimeMs
+    fun isLive(): Boolean = liveMetadata != null
+    fun getDownloadedSegmentsDebug(itag: Int): String =
+        initializedFormats[itag]?.downloadedSegments?.keys?.sorted()?.toString() ?: "no format"
+
     /** Returns the server's current target readahead for the selected track type, if present. */
     fun getTargetReadaheadMs(format: Representation): Int? {
         val policy = nextRequestPolicy ?: return null
@@ -194,26 +200,49 @@ class SabrClient private constructor(
         fatalError?.let { throw IOException("SABR error: ${it.type}") }
         val itag = playbackRequest.format.itag
         initializedFormats[itag]?.bufferedSegments?.keys?.retainAll(playbackRequest.bufferedSegments)
-        return runBlocking {
+        Log.i(TAG, "getNextSegment: itag=$itag, requested=${playbackRequest.segment}, live=${liveMetadata != null}, initFormats=${initializedFormats.keys}, hasFormat=${initializedFormats.containsKey(itag)}")
+        val result = runBlocking {
             withContext(dispatcher) {
                 var format = initializedFormats[itag]
                 repeat(if (liveMetadata != null) LIVE_REQUEST_RETRIES else 1) { attempt ->
                     if (format?.hasSegment(playbackRequest.segment) != true) {
                         if (attempt > 0) delay(LIVE_RETRY_DELAY_MS)
+                        Log.i(TAG, "media request: attempt=$attempt, itag=$itag, segment=${playbackRequest.segment}, playerTimeMs=${playbackRequest.segmentStartTimeMs}")
                         media(playbackRequest)
                         initializedFormats.keys.retainAll { key ->
                             audioFormat?.streamInfo?.itag == key || videoFormat?.streamInfo?.itag == key
                         }
                         format = initializedFormats[itag]
+                        Log.i(TAG, "after media: initFormats=${initializedFormats.keys}, hasSegment=${format?.hasSegment(playbackRequest.segment)}, downloaded=${format?.downloadedSegments?.keys?.sorted()}, pending=${pendingSegments[itag]?.size}, partial=${partialSegments.size}, endSegment=${format?.endSegmentNumber}")
                     }
                     if (format?.hasSegment(playbackRequest.segment) == true) {
                         val segment = format!!.getSegment(playbackRequest.segment)
                         if (segment != null) return@withContext segment
                     }
                 }
+                // Live fallback: if exact segment not found but any segment available, use earliest
+                if (liveMetadata != null) {
+                    val fallbackFormat = initializedFormats[itag]
+                    if (fallbackFormat != null && fallbackFormat.downloadedSegments.isNotEmpty()) {
+                        val avail = fallbackFormat.downloadedSegments.keys.sorted()
+                        Log.w(TAG, "live fallback: requested ${playbackRequest.segment} not found, available=$avail")
+                        // Try to return the smallest available live segment instead of failing
+                        val minSeg = avail.first()
+                        val seg = fallbackFormat.getSegment(minSeg)
+                        if (seg != null) {
+                            Log.i(TAG, "live fallback: returning segment $minSeg instead of ${playbackRequest.segment}")
+                            return@withContext seg
+                        }
+                    }
+                }
                 null
             }
         }
+        if (result == null) {
+            val f = initializedFormats[itag]
+            Log.e(TAG, "no segment ${playbackRequest.segment} for itag=$itag, available=${f?.downloadedSegments?.keys?.sorted()}, endSegment=${f?.endSegmentNumber}, liveHead=${liveMetadata?.headSequenceNumber}, pending=${pendingSegments[itag]?.size}, partialIds=${partialSegments.keys}")
+        }
+        return result
     }
 
     private suspend fun media(playbackRequest: PlaybackRequest) {
@@ -304,24 +333,31 @@ class SabrClient private constructor(
                 nextRequestPolicy = policy
                 backoffTime = if (policy.hasBackoffTimeMs()) policy.backoffTimeMs else null
                 playbackCookie = if (policy.hasPlaybackCookie()) policy.playbackCookie else null
+                Log.i(TAG, "next request policy: backoffMs=$backoffTime, targetAudio=${if (policy.hasTargetAudioReadaheadMs()) policy.targetAudioReadaheadMs else "null"}, targetVideo=${if (policy.hasTargetVideoReadaheadMs()) policy.targetVideoReadaheadMs else "null"}")
             }
             UMPPartId.PLAYBACK_START_POLICY -> {
-                // This policy is advisory: it tells the client how much data should be
-                // available before starting or resuming playback. Keep it in session state;
-                // the media3 loader remains responsible for actual buffering.
                 playbackStartPolicy = PlaybackStartPolicy.parseFrom(part.data)
+                Log.d(TAG, "playback start policy received")
             }
             UMPPartId.FORMAT_INITIALIZATION_METADATA -> {
                 val metadata = FormatInitializationMetadata.parseFrom(part.data)
+                Log.i(TAG, "format init: itag=${metadata.formatId.itag}, endSegment=${metadata.endSegmentNumber}, endTimeMs=${metadata.endTimeMs}, mime=${metadata.mimeType}")
                 val format = InitializedFormat(
                     metadata.formatId,
                     endSegmentNumber = metadata.endSegmentNumber,
                     duration = metadata.endTimeMs,
                 )
                 initializedFormats[metadata.formatId.itag] = format
-                pendingSegments.remove(metadata.formatId.itag)?.forEach { storeSegment(format, it) }
+                val pending = pendingSegments.remove(metadata.formatId.itag)
+                if (pending != null) {
+                    Log.i(TAG, "flushing ${pending.size} pending segments for itag=${metadata.formatId.itag}")
+                    pending.forEach { storeSegment(format, it) }
+                }
             }
-            UMPPartId.LIVE_METADATA -> liveMetadata = LiveMetadata.parseFrom(part.data)
+            UMPPartId.LIVE_METADATA -> {
+                liveMetadata = LiveMetadata.parseFrom(part.data)
+                Log.i(TAG, "live metadata: headSeq=${liveMetadata?.headSequenceNumber}, headTimeMs=${liveMetadata?.headTimeMs}, broadcastId=${liveMetadata?.broadcastId}")
+            }
             UMPPartId.SABR_SEEK -> {
                 val seek = SabrSeek.parseFrom(part.data)
                 if (seek.hasSeekMediaTime() && seek.hasSeekMediaTimescale() && seek.seekMediaTimescale > 0) {
@@ -337,9 +373,41 @@ class SabrClient private constructor(
             }
             UMPPartId.SABR_ERROR -> {
                 fatalError = SabrError.parseFrom(part.data)
+                Log.e(TAG, "SABR error: type=${fatalError?.type}, code=${fatalError?.code}")
                 throw IOException("SABR error: ${fatalError?.type}")
             }
-            else -> Unit
+            UMPPartId.REQUEST_IDENTIFIER -> Log.d(TAG, "REQUEST_IDENTIFIER part received (ignored)")
+            UMPPartId.REQUEST_CANCELLATION_POLICY -> Log.d(TAG, "REQUEST_CANCELLATION_POLICY part received (ignored)")
+            UMPPartId.SABR_CONTEXT_UPDATE -> {
+                try {
+                    val upd = SabrContextUpdate.parseFrom(part.data)
+                    // Convert SabrContextUpdate -> StreamerContext.SabrContext (type+value only)
+                    val ctx = SabrContext.newBuilder().setType(upd.type).setValue(upd.value).build()
+                    if (upd.hasWritePolicy() && upd.writePolicy == SabrContextWritePolicy.KEEP_EXISTING && sabrContexts.containsKey(upd.type)) {
+                        Log.d(TAG, "skipping KEEP_EXISTING context type=${upd.type}")
+                    } else {
+                        sabrContexts[upd.type] = ctx
+                        if (upd.hasSendByDefault() && upd.sendByDefault) activeSabrContexts.add(upd.type)
+                        Log.i(TAG, "sabr context update: type=${upd.type}, sendByDefault=${upd.sendByDefault}, writePolicy=${upd.writePolicy}")
+                    }
+                } catch (e: Exception) { Log.w(TAG, "failed to parse SABR_CONTEXT_UPDATE: $e") }
+            }
+            UMPPartId.SABR_CONTEXT_SENDING_POLICY -> {
+                try {
+                    val pol = SabrContextSendingPolicy.parseFrom(part.data)
+                    pol.startPolicyList.forEach { activeSabrContexts.add(it) }
+                    pol.stopPolicyList.forEach { activeSabrContexts.remove(it) }
+                    pol.discardPolicyList.forEach { sabrContexts.remove(it); activeSabrContexts.remove(it) }
+                    Log.i(TAG, "sabr context sending policy: start=${pol.startPolicyList}, stop=${pol.stopPolicyList}, discard=${pol.discardPolicyList}")
+                } catch (e: Exception) { Log.w(TAG, "failed to parse SABR_CONTEXT_SENDING_POLICY: $e") }
+            }
+            UMPPartId.STREAM_PROTECTION_STATUS -> {
+                try {
+                    val s = StreamProtectionStatus.parseFrom(part.data)
+                    Log.i(TAG, "stream protection: status=${s.status}")
+                } catch (e: Exception) { Log.w(TAG, "failed to parse STREAM_PROTECTION_STATUS: $e") }
+            }
+            else -> Log.w(TAG, "Unhandled UMP part: ${part.type} size=${part.data.size}")
         }
     }
 

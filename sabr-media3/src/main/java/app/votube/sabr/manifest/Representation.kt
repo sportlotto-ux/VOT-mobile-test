@@ -51,6 +51,7 @@ data class Representation(
         private fun buildFormat(stream: SabrStreamInfo): Format {
             return if (MimeTypes.isVideo(stream.mimeType)) {
                 Format.Builder()
+                    .setId(stream.itag.toString())
                     .setCodecs(stream.codec)
                     .setContainerMimeType(stream.mimeType)
                     .setSampleMimeType(MimeTypes.getVideoMediaMimeType(stream.codec))
@@ -65,6 +66,7 @@ data class Representation(
                     null
                 }
                 Format.Builder()
+                    .setId(stream.itag.toString())
                     .setCodecs(stream.codec)
                     .setContainerMimeType(stream.mimeType)
                     .setSampleMimeType(MimeTypes.getAudioMediaMimeType(stream.codec))
