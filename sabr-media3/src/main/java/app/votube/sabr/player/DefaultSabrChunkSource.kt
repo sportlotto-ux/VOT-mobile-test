@@ -86,6 +86,7 @@ class DefaultSabrChunkSource(
 
     private var fatalError: Exception? = null
     private var missingLastSegment = false
+    private val isLive = manifest.durationMs == C.TIME_UNSET
 
     init {
         val representations =
@@ -260,7 +261,7 @@ class DefaultSabrChunkSource(
             val endSegmentNumber = sabrClient.getEndSegmentNumber(
                 representationHolder.representation.formatId()
             )
-            if (endSegmentNumber != null && endSegmentNumber > 0) {
+            if (!isLive && endSegmentNumber != null && endSegmentNumber > 0) {
                 val lastAvailableSegmentNum = endSegmentNumber - 1
                 if (segmentNum > lastAvailableSegmentNum
                     || (missingLastSegment && segmentNum >= lastAvailableSegmentNum)) {
@@ -298,8 +299,8 @@ class DefaultSabrChunkSource(
 
             android.util.Log.i(
                 "SabrChunkSource",
-                "requesting segment (pre-index): index=$segmentNum, sabrSegment=${segmentNum + 1}, " +
-                    "endSegmentNumber=$endSegmentNumber"
+                "requesting segment (pre-index): live=$isLive, index=$segmentNum, " +
+                    "sabrSegment=${segmentNum + 1}, endSegmentNumber=$endSegmentNumber"
             )
             out.chunk = ContainerMediaChunk(
                 dataSource,
@@ -333,14 +334,14 @@ class DefaultSabrChunkSource(
             lastAvailableSegmentNum
         )
 
-        if (segmentNum > lastAvailableSegmentNum
-            || (missingLastSegment && segmentNum >= lastAvailableSegmentNum)) {
+        if (!isLive && (segmentNum > lastAvailableSegmentNum
+            || (missingLastSegment && segmentNum >= lastAvailableSegmentNum))) {
             // The segment is beyond the end of the period.
             out.endOfStream = true
             return
         }
 
-        if (representationHolder.getSegmentStartTimeUs(segmentNum) >= representationHolder.periodDurationUs) {
+        if (!isLive && representationHolder.getSegmentStartTimeUs(segmentNum) >= representationHolder.periodDurationUs) {
             // The period duration clips the period to a position before the segment.
             out.endOfStream = true
             return
