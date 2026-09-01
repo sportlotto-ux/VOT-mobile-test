@@ -192,6 +192,7 @@ class SabrClient private constructor(
         serverSeekTimeMs = null
         return v
     }
+    fun peekServerSeekMs(): Long? = serverSeekTimeMs
     fun getLiveWindowDurationMs(): Long? {
         val head = getLiveHeadTimeMs() ?: return null
         val min = getMinSeekableTimeMs() ?: 0L

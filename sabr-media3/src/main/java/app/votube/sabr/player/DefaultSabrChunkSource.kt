@@ -264,19 +264,21 @@ class DefaultSabrChunkSource(
                 val headSeq = sabrClient.getLiveHeadSequenceNumber()
                 val headTimeMs = sabrClient.getLiveHeadTimeMs()
                 val minSeekMs = sabrClient.getMinSeekableTimeMs()
-                val serverSeekMs = sabrClient.consumeServerSeekMs()
-                // Слушаем голову эфира: если сервер прислал seek — берём его отрезок
-                // Иначе для live edge берём headSeq, для DVR rewind — проверяем пройденное время
-                if (serverSeekMs != null) {
-                    requestedTimeMs = serverSeekMs
-                    val estDurationMs = if (representationHolder.lastSegmentDurationUs > 0) representationHolder.lastSegmentDurationUs / 1000 else 5000L
-                    if (headSeq != null && headTimeMs != null) {
-                        val offsetMs = headTimeMs - serverSeekMs
-                        val segmentsAgo = if (offsetMs > 0) offsetMs / estDurationMs else 0L
-                        segmentNum = maxOf(0L, headSeq - segmentsAgo)
-                    }
-                    android.util.Log.i("SabrChunkSource", "live serverSeek: seekMs=$serverSeekMs headSeq=$headSeq headTimeMs=$headTimeMs -> segmentNum=$segmentNum requestedTimeMs=$requestedTimeMs")
-                } else if (previousChunk == null) {
+                // Слушаем голову эфира: для live edge берём headSeq, для DVR rewind — проверяем пройденное время
+                // SABR_SEEK обрабатываем только на seek/initial (когда queue пуст), иначе последовательные сегменты идут по порядку
+                if (previousChunk == null) {
+                    val serverSeekMs = sabrClient.consumeServerSeekMs()
+                    if (serverSeekMs != null) {
+                        // Сервер сказал куда мотать — берём отрезок по времени seek, чтобы вернуться к началу или к голове
+                        requestedTimeMs = serverSeekMs
+                        val estDurationMs = if (representationHolder.lastSegmentDurationUs > 0) representationHolder.lastSegmentDurationUs / 1000 else 5000L
+                        if (headSeq != null && headTimeMs != null) {
+                            val offsetMs = headTimeMs - serverSeekMs
+                            val segmentsAgo = if (offsetMs > 0) offsetMs / estDurationMs else 0L
+                            segmentNum = maxOf(0L, headSeq - segmentsAgo)
+                        }
+                        android.util.Log.i("SabrChunkSource", "live serverSeek (initial/seek): seekMs=$serverSeekMs headSeq=$headSeq headTimeMs=$headTimeMs -> segmentNum=$segmentNum requestedTimeMs=$requestedTimeMs")
+                    } else {
                     // Первый запрос live: слушаем headSeq. Если голова далеко (>100), стартуем с головы.
                     // Для DVR-перемотки назад проверяем отрезок пройденного времени: loadPosition 0 => начало окна, иначе голова.
                     val targetMs = Util.usToMs(loadPositionUs)
@@ -303,6 +305,7 @@ class DefaultSabrChunkSource(
                         segmentNum = headSeq
                         requestedTimeMs = headTimeMs ?: requestedTimeMs
                         android.util.Log.i("SabrChunkSource", "live head fallback: headSeq=$headSeq -> segmentNum=$segmentNum")
+                    }
                     }
                 }
                 android.util.Log.i(
