@@ -191,11 +191,15 @@ class SabrMediaSource(
     }
 
     internal fun onLiveMetadata(meta: video_streaming.LiveMetadataOuterClass.LiveMetadata) {
-        // Вычисляем DVR окно: от minSeek до headTime, чтобы можно было вернуться к началу стрима
+        // Вычисляем DVR окно: от ЗАФИКСИРОВАННОГО windowStart до headTime.
+        // windowStart фиксируется SabrClient на первом LiveMetadata — домен времени чанков
+        // (windowPos = time − windowStart) совпадает с доменом таймлайна и не плывёт вместе
+        // со скользящим minSeekable (иначе позиции в периоде прыгают → фризы/скачки).
         val headTimeMs = if (meta.hasHeadTimeMs()) meta.headTimeMs else 0L
         val minSeekMs = if (meta.hasMinSeekableTimeTicks() && meta.hasMinSeekableTimescale() && meta.minSeekableTimescale != 0)
             meta.minSeekableTimeTicks * 1000L / meta.minSeekableTimescale else 0L
-        val windowMs = if (headTimeMs > minSeekMs) headTimeMs - minSeekMs else 0L
+        val windowStartMs = sabrClient.getLiveWindowStartMs() ?: minSeekMs
+        val windowMs = if (headTimeMs > windowStartMs) headTimeMs - windowStartMs else 0L
         if (windowMs <= 0) return
         val windowUs = Util.msToUs(windowMs)
         // Стабильность как в браузере — 15 сек до головы (3 сегмента), не меньше 5 сек от начала
@@ -204,7 +208,7 @@ class SabrMediaSource(
         if (windowUs != liveWindowDurationUs) {
             liveWindowDurationUs = windowUs
             liveDefaultPositionUs = defaultPosUs
-            android.util.Log.i("SabrMediaSource", "live timeline update: headTimeMs=$headTimeMs minSeekMs=$minSeekMs windowMs=$windowMs defaultPosMs=${Util.usToMs(defaultPosUs)}")
+            android.util.Log.i("SabrMediaSource", "live timeline update: headTimeMs=$headTimeMs windowStartMs=$windowStartMs windowMs=$windowMs defaultPosMs=${Util.usToMs(defaultPosUs)}")
             // refreshSourceInfo можно звать с любого потока — BaseMediaSource сам выставит на нужный handler
             processManifest()
         }

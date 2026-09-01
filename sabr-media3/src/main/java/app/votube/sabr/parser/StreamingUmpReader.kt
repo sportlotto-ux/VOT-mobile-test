@@ -16,6 +16,7 @@ class StreamingUmpReader(
     private var buffer = ByteArray(0)
     private var position = 0
     private var endOfInput = false
+    private var zeroReadStreak = 0
 
     fun readPart(): Part? {
         val type = readVarint() ?: return null
@@ -83,8 +84,15 @@ class StreamingUmpReader(
             buffer = ByteArray(0)
             position = 0
         } else if (count > 0) {
+            zeroReadStreak = 0
             buffer = chunk.copyOf(count)
             position = 0
+        } else {
+            // read() == 0 — прогресса нет (зависший сокет / неблокирующий поток).
+            // Раньше здесь крутился вечный пустой цикл = фриз загрузки без ошибки.
+            if (++zeroReadStreak > 100) {
+                throw java.io.IOException("UMP stream stalled: no data progress after $zeroReadStreak reads")
+            }
         }
     }
 

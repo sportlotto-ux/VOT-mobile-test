@@ -136,6 +136,21 @@ class SabrClient private constructor(
     /** sequence последнего реально отданного сервером сегмента по itag — чтобы следующий запрос
      *  шёл от реальной нумерации сервера, а не от локально посчитанного индекса (нормализация по времени) */
     private val lastReturnedSequenceByItag = mutableMapOf<Int, Long>()
+    /** время (startMs/endMs) последнего реально отданного сегмента по itag. Время — ОБЩИЙ домен
+     *  для аудио и видео, в отличие от sequence: у каждого формата своя серия номеров (в логе одно
+     *  и то же время = video seq 4567, audio seq 4570), поэтому синхронизация A/V и планирование
+     *  живут по времени, а sequence — только для bookkeeping запросов. */
+    private val lastReturnedTimeMsByItag = mutableMapOf<Int, Long>()
+    private val lastReturnedEndTimeMsByItag = mutableMapOf<Int, Long>()
+    /** minSeekable на момент первого LiveMetadata — фиксируем. Домен времени чанков
+     *  (windowPos = time − windowStart) не должен плыть вместе со скользящим minSeekable
+     *  в течение периода, иначе startTime старых и новых чанков разъедутся (фризы/скачки). */
+    private var liveWindowStartMs: Long? = null
+    /** Lock разделяемого состояния (initializedFormats/lastReturned/liveMetadata/partialSegments):
+     *  мутации идут и с loader-потока (getNextSegment), и с dispatcher-корутины (processPart). */
+    private val stateLock = Any()
+    /** Доступ к разделяемому состоянию под локом. */
+    private fun <T> withState(block: () -> T): T = synchronized(stateLock, block)
     /** last use timestamp per itag — to avoid churn when ABR oscillates (keep recent formats) */
     private val lastFormatUseMs = mutableMapOf<Int, Long>()
     /** флаг что live уже стартовал с головы — нужен чтобы отличить начальный edge от DVR rewind к началу */
@@ -155,7 +170,7 @@ class SabrClient private constructor(
 
     init { poTokenProvider?.getStreamingPoToken(videoId)?.let { poToken = ByteString.copyFrom(it) } }
 
-    fun selectFormat(representation: Representation) {
+    fun selectFormat(representation: Representation) = withState {
         if (MimeTypes.isAudio(representation.format.containerMimeType)) {
             if (audioFormat?.streamInfo?.itag != representation.streamInfo.itag) {
                 Log.i(TAG, "format changed: track=audio, itag=${representation.streamInfo.itag}, " +
@@ -173,76 +188,135 @@ class SabrClient private constructor(
         lastFormatUseMs[representation.streamInfo.itag] = SystemClock.elapsedRealtime()
     }
 
-    fun getEndSegmentNumber(formatId: FormatId): Long? = initializedFormats[formatId.itag]?.endSegmentNumber
+    fun getEndSegmentNumber(formatId: FormatId): Long? =
+        withState { initializedFormats[formatId.itag]?.endSegmentNumber }
 
-    fun getFirstAvailableSegmentNumber(formatId: FormatId): Long? =
+    fun getFirstAvailableSegmentNumber(formatId: FormatId): Long? = withState {
         initializedFormats[formatId.itag]?.downloadedSegments?.keys?.minOrNull()
+    }
 
-    fun getLiveHeadSequenceNumber(): Long? = liveMetadata?.headSequenceNumber
-    fun getLiveHeadTimeMs(): Long? = liveMetadata?.headTimeMs
-    fun isLive(): Boolean = liveMetadata != null
-    fun hasFormatInitialized(itag: Int): Boolean = initializedFormats.containsKey(itag)
+    fun getLiveHeadSequenceNumber(): Long? = withState { liveMetadata?.headSequenceNumber }
+    fun getLiveHeadTimeMs(): Long? = withState { liveMetadata?.headTimeMs }
+    fun isLive(): Boolean = withState { liveMetadata != null }
+    fun hasFormatInitialized(itag: Int): Boolean = withState { initializedFormats.containsKey(itag) }
 
-    fun getDownloadedSegmentsDebug(itag: Int): String =
+    fun getDownloadedSegmentsDebug(itag: Int): String = withState {
         initializedFormats[itag]?.downloadedSegments?.keys?.sorted()?.toString() ?: "no format"
+    }
 
     /** sequence последнего отданного сегмента для itag, или null если ещё не отдавали.
      *  ChunkSource использует его, чтобы следующий live-запрос шёл от реальной нумерации сервера. */
-    fun getLastReturnedSequence(itag: Int): Long? = lastReturnedSequenceByItag[itag]
-    fun getMaxLastReturnedSequence(): Long? = lastReturnedSequenceByItag.values.maxOrNull()
+    fun getLastReturnedSequence(itag: Int): Long? = withState { lastReturnedSequenceByItag[itag] }
+    fun getMaxLastReturnedSequence(): Long? = withState { lastReturnedSequenceByItag.values.maxOrNull() }
 
-    fun getMinSeekableTimeMs(): Long? = liveMetadata?.let {
-        if (it.hasMinSeekableTimeTicks() && it.hasMinSeekableTimescale() && it.minSeekableTimescale != 0)
-            it.minSeekableTimeTicks * 1000L / it.minSeekableTimescale else null
+    /** Время (startMs) последнего отданного сегмента для itag — база для планирования следующего. */
+    fun getLastReturnedTimeMs(itag: Int): Long? = withState { lastReturnedTimeMsByItag[itag] }
+    /** Конец (startMs+duration) последнего отданного сегмента для itag — requestedTime следующего запроса. */
+    fun getLastReturnedEndTimeMs(itag: Int): Long? = withState { lastReturnedEndTimeMsByItag[itag] }
+    /** Максимальное время последнего отданного сегмента по всем форматам. Время — общий домен
+     *  для аудио/видео, в отличие от sequence (серии номеров у форматов разные и несравнимы). */
+    fun getMaxLastReturnedTimeMs(): Long? = withState { lastReturnedTimeMsByItag.values.maxOrNull() }
+
+    /** Начало DVR-окна, зафиксированное на первом LiveMetadata (не скользит в течение периода). */
+    fun getLiveWindowStartMs(): Long? = withState { liveWindowStartMs }
+
+    fun getMinSeekableTimeMs(): Long? = withState {
+        liveMetadata?.let {
+            if (it.hasMinSeekableTimeTicks() && it.hasMinSeekableTimescale() && it.minSeekableTimescale != 0)
+                it.minSeekableTimeTicks * 1000L / it.minSeekableTimescale else null
+        }
     }
-    fun getMaxSeekableTimeMs(): Long? = liveMetadata?.let {
-        if (it.hasMaxSeekableTimeTicks() && it.hasMaxSeekableTimescale() && it.maxSeekableTimescale != 0)
-            it.maxSeekableTimeTicks * 1000L / it.maxSeekableTimescale else null
+    fun getMaxSeekableTimeMs(): Long? = withState {
+        liveMetadata?.let {
+            if (it.hasMaxSeekableTimeTicks() && it.hasMaxSeekableTimescale() && it.maxSeekableTimescale != 0)
+                it.maxSeekableTimeTicks * 1000L / it.maxSeekableTimescale else null
+        }
     }
     /** consume SABR_SEEK once so caller can apply it and we don't reuse stale value */
-    fun consumeServerSeekMs(): Long? {
+    fun consumeServerSeekMs(): Long? = withState {
         val v = serverSeekTimeMs
         serverSeekTimeMs = null
-        return v
+        v
     }
-    fun peekServerSeekMs(): Long? = serverSeekTimeMs
-    fun getLiveWindowDurationMs(): Long? {
-        val head = getLiveHeadTimeMs() ?: return null
-        val min = getMinSeekableTimeMs() ?: 0L
-        return (head - min).takeIf { it > 0 }
+    fun peekServerSeekMs(): Long? = withState { serverSeekTimeMs }
+    fun getLiveWindowDurationMs(): Long? = withState {
+        val head = liveMetadata?.headTimeMs
+        if (head == null) return@withState null
+        val start = liveWindowStartMs ?: liveMetadata?.let {
+            if (it.hasMinSeekableTimeTicks() && it.hasMinSeekableTimescale() && it.minSeekableTimescale != 0)
+                it.minSeekableTimeTicks * 1000L / it.minSeekableTimescale else 0L
+        } ?: 0L
+        (head - start).takeIf { it > 0 }
+    }
+
+    /** Запомнить реально отданный сегмент: sequence (серия сервера для этого формата) и время
+     *  (общий домен аудио/видео) — на этом строятся следующие запросы и A/V синхронизация. */
+    private fun noteServed(itag: Int, seg: Segment) {
+        withState {
+            lastReturnedSequenceByItag[itag] = seg.sequenceNumber
+            lastReturnedTimeMsByItag[itag] = seg.header.startMs
+            lastReturnedEndTimeMsByItag[itag] = seg.header.startMs + seg.duration
+        }
+    }
+
+    /** Ближайший по времени сегмент из кэша формата (в пределах tolerance) или null.
+     *  Сервер выбирает чанк по playerTimeMs и может прислать другой sequence — тайм-матч
+     *  надёжнее строгого равенства номеров. */
+    private fun findTimeMatch(format: InitializedFormat?, requestedTimeMs: Long): Segment? {
+        val cached = format?.downloadedSegments?.values ?: return null
+        val byTime = cached.minByOrNull { kotlin.math.abs(it.header.startMs - requestedTimeMs) } ?: return null
+        return byTime.takeIf { kotlin.math.abs(it.header.startMs - requestedTimeMs) <= LIVE_TIME_TOLERANCE_MS }
     }
 
     /** Returns the server's current target readahead for the selected track type, if present. */
-    fun getTargetReadaheadMs(format: Representation): Int? {
-        val policy = nextRequestPolicy ?: return null
+    fun getTargetReadaheadMs(format: Representation): Int? = withState {
+        val policy = nextRequestPolicy ?: return@withState null
         val value = if (MimeTypes.isAudio(format.format.containerMimeType)) {
             if (policy.hasTargetAudioReadaheadMs()) policy.targetAudioReadaheadMs else null
         } else {
             if (policy.hasTargetVideoReadaheadMs()) policy.targetVideoReadaheadMs else null
         }
-        return value?.takeIf { it >= 0 }
+        value?.takeIf { it >= 0 }
     }
 
     /** Returns the server's current minimum readahead for the selected track type, if present. */
-    fun getMinReadaheadMs(format: Representation): Int? {
-        val policy = nextRequestPolicy ?: return null
+    fun getMinReadaheadMs(format: Representation): Int? = withState {
+        val policy = nextRequestPolicy ?: return@withState null
         val value = if (MimeTypes.isAudio(format.format.containerMimeType)) {
             if (policy.hasMinAudioReadaheadMs()) policy.minAudioReadaheadMs else null
         } else {
             if (policy.hasMinVideoReadaheadMs()) policy.minVideoReadaheadMs else null
         }
-        return value?.takeIf { it >= 0 }
+        value?.takeIf { it >= 0 }
     }
 
     fun getNextSegment(playbackRequest: PlaybackRequest): Segment? {
         fatalError?.let { throw IOException("SABR error: ${it.type}") }
         val itag = playbackRequest.format.itag
-        lastFormatUseMs[itag] = SystemClock.elapsedRealtime()
-        initializedFormats[itag]?.bufferedSegments?.keys?.retainAll(playbackRequest.bufferedSegments)
-        Log.i(TAG, "getNextSegment: itag=$itag, requested=${playbackRequest.segment}, live=${liveMetadata != null}, initFormats=${initializedFormats.keys}, hasFormat=${initializedFormats.containsKey(itag)}")
+        withState {
+            lastFormatUseMs[itag] = SystemClock.elapsedRealtime()
+            initializedFormats[itag]?.bufferedSegments?.keys?.retainAll(playbackRequest.bufferedSegments)
+        }
+        Log.i(TAG, "getNextSegment: itag=$itag, requested=${playbackRequest.segment}, live=${isLive()}, initFormats=${withState { initializedFormats.keys }}, hasFormat=${hasFormatInitialized(itag)}")
         val result = runBlocking {
             withContext(dispatcher) {
-                var format = initializedFormats[itag]
+                var format = withState { initializedFormats[itag] }
+                // Быстрый путь (live): точного sequence нет, но запрошенное время уже покрыто
+                // префетчем прошлого ответа — отдаём без HTTP-запроса. Сервер выбирает сегмент по
+                // playerTimeMs, поэтому тайм-матч корректен; гонять за точным номером — лишние
+                // раундтрипы, каждый из которых крадёт полосу и даёт фризы (см. лог 20:20:2x:
+                // каждый сегмент шёл через 2-3 запроса «requested N not found»).
+                if (liveMetadata != null && format?.hasSegment(playbackRequest.segment) != true) {
+                    val cached = withState { findTimeMatch(format, playbackRequest.segmentStartTimeMs) }
+                    if (cached != null) {
+                        val served = withState { format!!.getSegment(cached.sequenceNumber) }
+                        if (served != null) {
+                            Log.i(TAG, "live time-match (cache): seq=${served.sequenceNumber} startMs=${served.header.startMs} ~ requested ${playbackRequest.segmentStartTimeMs} instead of ${playbackRequest.segment} (no request)")
+                            noteServed(itag, served)
+                            return@withContext served
+                        }
+                    }
+                }
                 repeat(if (liveMetadata != null) LIVE_REQUEST_RETRIES else 1) { attempt ->
                     if (format?.hasSegment(playbackRequest.segment) != true) {
                         if (attempt > 0) delay(LIVE_RETRY_DELAY_MS)
@@ -251,77 +325,94 @@ class SabrClient private constructor(
                         // Retain selected + any format that still holds data or was used recently (30s)
                         // — avoids churn when ABR oscillates and lets multiplexed responses reuse
                         // already-downloaded segments for the other track without re-fetch.
-                        val nowMs = SystemClock.elapsedRealtime()
-                        initializedFormats.keys.retainAll { key ->
-                            key == audioFormat?.streamInfo?.itag || key == videoFormat?.streamInfo?.itag ||
-                                initializedFormats[key]?.let { it.downloadedSegments.isNotEmpty() || it.bufferedSegments.isNotEmpty() } == true ||
-                                pendingSegments.containsKey(key) ||
-                                (lastFormatUseMs[key]?.let { nowMs - it < 30_000 } == true)
+                        withState {
+                            val nowMs = SystemClock.elapsedRealtime()
+                            initializedFormats.keys.retainAll { key ->
+                                key == audioFormat?.streamInfo?.itag || key == videoFormat?.streamInfo?.itag ||
+                                    initializedFormats[key]?.let { it.downloadedSegments.isNotEmpty() || it.bufferedSegments.isNotEmpty() } == true ||
+                                    pendingSegments.containsKey(key) ||
+                                    (lastFormatUseMs[key]?.let { nowMs - it < 30_000 } == true)
+                            }
                         }
-                        format = initializedFormats[itag]
-                        Log.i(TAG, "after media: initFormats=${initializedFormats.keys}, hasSegment=${format?.hasSegment(playbackRequest.segment)}, downloaded=${format?.downloadedSegments?.keys?.sorted()}, pending=${pendingSegments[itag]?.size}, partial=${partialSegments.size}, endSegment=${format?.endSegmentNumber}")
+                        format = withState { initializedFormats[itag] }
+                        Log.i(TAG, "after media: initFormats=${withState { initializedFormats.keys }}, hasSegment=${format?.hasSegment(playbackRequest.segment)}, downloaded=${format?.downloadedSegments?.keys?.sorted()}, pending=${withState { pendingSegments[itag]?.size }}, partial=${withState { partialSegments.size }}, endSegment=${format?.endSegmentNumber}")
                     }
                     if (format?.hasSegment(playbackRequest.segment) == true) {
-                        val segment = format!!.getSegment(playbackRequest.segment)
+                        val segment = withState { format!!.getSegment(playbackRequest.segment) }
                         if (segment != null) {
-                            lastReturnedSequenceByItag[itag] = segment.sequenceNumber
+                            noteServed(itag, segment)
                             return@withContext segment
+                        }
+                    }
+                    // Тайм-матч сразу после ответа: сервер уже вернул сегмент, покрывающий запрошенное
+                    // время — не делаем ещё 2 попытки в поисках точного sequence (каждая — новый HTTP-запрос).
+                    if (liveMetadata != null) {
+                        val timeMatch = withState { findTimeMatch(format, playbackRequest.segmentStartTimeMs) }
+                        if (timeMatch != null) {
+                            val served = withState { format!!.getSegment(timeMatch.sequenceNumber) }
+                            if (served != null) {
+                                Log.i(TAG, "live time-match (attempt=$attempt): seq=${served.sequenceNumber} startMs=${served.header.startMs} ~ requested ${playbackRequest.segmentStartTimeMs} instead of ${playbackRequest.segment}")
+                                noteServed(itag, served)
+                                return@withContext served
+                            }
                         }
                     }
                 }
                 // Live: нормализованное сопоставление сегментов ПО ВРЕМЕНИ (startMs), а не по строгому
                 // равенству requestedSequence == protobuf.sequence. Сервер выбирает чанк по playerTimeMs и
                 // может вернуть другой sequence, чем запросил клиент — ищем ближайший по времени чанк,
-                // а следующий запрос уходит от реально отданного sequence (lastReturnedSequenceByItag).
+                // а следующий запрос уходит от реально отданных sequence/времени (noteServed).
                 if (liveMetadata != null) {
-                    val fallbackFormat = initializedFormats[itag]
-                    if (fallbackFormat != null && fallbackFormat.downloadedSegments.isNotEmpty()) {
-                        val avail = fallbackFormat.downloadedSegments.keys.sorted()
-                        val headSeq = liveMetadata?.headSequenceNumber
-                        val requestedSeq = playbackRequest.segment
-                        val requestedTime = playbackRequest.segmentStartTimeMs
-                        Log.w(TAG, "live fallback: requested $requestedSeq not found, available=$avail, headSeq=$headSeq, headTimeMs=${liveMetadata?.headTimeMs}, serverSeekMs=$serverSeekTimeMs, requestedTimeMs=$requestedTime")
-                        // 1) Точный sequence (обычный согласованный случай)
-                        var seg: Segment? = fallbackFormat.getSegment(requestedSeq)
-                        // 2) По времени: сервер вернул другой sequence, но чанк покрывает запрошенное время
-                        if (seg == null) {
-                            val byTime = fallbackFormat.downloadedSegments.values
-                                .minByOrNull { kotlin.math.abs(it.header.startMs - requestedTime) }
-                            if (byTime != null && kotlin.math.abs(byTime.header.startMs - requestedTime) < LIVE_TIME_TOLERANCE_MS) {
-                                seg = fallbackFormat.getSegment(byTime.sequenceNumber)
-                                if (seg != null) {
-                                    Log.i(TAG, "live fallback by time: returned seq ${seg.sequenceNumber} startMs=${seg.header.startMs} ~ requestedTime $requestedTime instead of $requestedSeq")
+                    withState {
+                        val fallbackFormat = initializedFormats[itag]
+                        if (fallbackFormat != null && fallbackFormat.downloadedSegments.isNotEmpty()) {
+                            val avail = fallbackFormat.downloadedSegments.keys.sorted()
+                            val headSeq = liveMetadata?.headSequenceNumber
+                            val requestedSeq = playbackRequest.segment
+                            val requestedTime = playbackRequest.segmentStartTimeMs
+                            Log.w(TAG, "live fallback: requested $requestedSeq not found, available=$avail, headSeq=$headSeq, headTimeMs=${liveMetadata?.headTimeMs}, serverSeekMs=$serverSeekTimeMs, requestedTimeMs=$requestedTime")
+                            // 1) Точный sequence (обычный согласованный случай)
+                            var seg: Segment? = fallbackFormat.getSegment(requestedSeq)
+                            // 2) По времени: сервер вернул другой sequence, но чанк покрывает запрошенное время
+                            if (seg == null) {
+                                val byTime = findTimeMatch(fallbackFormat, requestedTime)
+                                if (byTime != null) {
+                                    seg = fallbackFormat.getSegment(byTime.sequenceNumber)
+                                    if (seg != null) {
+                                        Log.i(TAG, "live fallback by time: returned seq ${seg.sequenceNumber} startMs=${seg.header.startMs} ~ requestedTime $requestedTime instead of $requestedSeq")
+                                    }
                                 }
                             }
-                        }
-                        // 3) Последний шанс — ближайший к голове (live edge / reconnect в середине эфира)
-                        if (seg == null && headSeq != null) {
-                            val nearestHead = fallbackFormat.downloadedSegments.keys.minByOrNull { kotlin.math.abs(it - headSeq) }
-                            if (nearestHead != null) {
-                                seg = fallbackFormat.getSegment(nearestHead)
-                                if (seg != null) {
-                                    Log.i(TAG, "live nearest head fallback: returned $nearestHead for head $headSeq")
-                                    hasStartedLive = true
+                            // 3) Последний шанс — ближайший к голове (live edge / reconnect в середине эфира)
+                            if (seg == null && headSeq != null) {
+                                val nearestHead = fallbackFormat.downloadedSegments.keys.minByOrNull { kotlin.math.abs(it - headSeq) }
+                                if (nearestHead != null) {
+                                    seg = fallbackFormat.getSegment(nearestHead)
+                                    if (seg != null) {
+                                        Log.i(TAG, "live nearest head fallback: returned $nearestHead for head $headSeq")
+                                        hasStartedLive = true
+                                    }
                                 }
                             }
+                            if (seg != null) {
+                                noteServed(itag, seg)
+                                serverSeekTimeMs = null
+                                return@withState seg
+                            }
                         }
-                        if (seg != null) {
-                            lastReturnedSequenceByItag[itag] = seg.sequenceNumber
-                            serverSeekTimeMs = null
-                            return@withContext seg
-                        }
-                    }
+                        null
+                    }?.let { return@withContext it }
                 }
                 null
             }
         }
         if (result == null) {
-            val f = initializedFormats[itag]
+            val f = withState { initializedFormats[itag] }
             // Для live с пустым кэшем не спамим E — это transient (голова ещё не догнала, или трек только что инициализирован)
             if (liveMetadata != null && f?.downloadedSegments?.isEmpty() == true) {
-                Log.w(TAG, "live no segment yet ${playbackRequest.segment} for itag=$itag, head=${liveMetadata?.headSequenceNumber}, pending=${pendingSegments[itag]?.size} — will retry at head")
+                Log.w(TAG, "live no segment yet ${playbackRequest.segment} for itag=$itag, head=${withState { liveMetadata?.headSequenceNumber }}, pending=${withState { pendingSegments[itag]?.size }} — will retry at head")
             } else {
-                Log.e(TAG, "no segment ${playbackRequest.segment} for itag=$itag, available=${f?.downloadedSegments?.keys?.sorted()}, endSegment=${f?.endSegmentNumber}, liveHead=${liveMetadata?.headSequenceNumber}, pending=${pendingSegments[itag]?.size}, partialIds=${partialSegments.keys}")
+                Log.e(TAG, "no segment ${playbackRequest.segment} for itag=$itag, available=${f?.downloadedSegments?.keys?.sorted()}, endSegment=${f?.endSegmentNumber}, liveHead=${withState { liveMetadata?.headSequenceNumber }}, pending=${withState { pendingSegments[itag]?.size }}, partialIds=${withState { partialSegments.keys }}")
             }
         }
         return result
@@ -330,35 +421,38 @@ class SabrClient private constructor(
     private suspend fun media(playbackRequest: PlaybackRequest) {
         backoffTime?.let { delay(it.toLong()); backoffTime = null }
         val now = SystemClock.elapsedRealtime()
-        val xtags = audioFormat?.formatId()?.xtags?.let { Xtags(it) }
-        val state = ClientAbrState.newBuilder().setPlayerTimeMs(playbackRequest.segmentStartTimeMs)
-            .setEnabledTrackTypesBitfield(if (videoFormat == null) 1 else 0)
-            .setPlaybackRate(playbackRequest.playbackSpeed)
-            .setElapsedWallTimeMs(lastRequestMs?.let { now - it } ?: 0)
-            .setTimeSinceLastSeek(lastSeekMs?.let { now - it } ?: 0)
-            .setTimeSinceLastManualFormatSelectionMs(lastManualFormatSelectionMs?.let { now - it } ?: 0)
-            .setTimeSinceLastActionMs(lastActionMs?.let { now - it } ?: 0)
-            .setAudioTrackId(audioFormat?.streamInfo?.audioTrackId ?: "")
-            .setDrcEnabled(audioFormat?.streamInfo?.isDrc == true || xtags?.isDrcAudio() == true)
-            .setEnableVoiceBoost(xtags?.isVoiceBoosted() ?: false).setClientViewportIsFlexible(false)
-            .setBandwidthEstimate(bandwidthEstimator.bitrateEstimate)
-            .setStickyResolution(max(videoFormat?.streamInfo?.height ?: 0, 360))
-            .setClientViewportHeight(max(videoFormat?.streamInfo?.height ?: 0, 360))
-            .setClientViewportWidth(max(videoFormat?.streamInfo?.width ?: 0, 640))
-            .setLastManualSelectedResolution(max(videoFormat?.streamInfo?.height ?: 0, 360)).setVisibility(1).build()
-        val abr = VideoPlaybackAbrRequest.newBuilder().setClientAbrState(state)
-            .setPlayerTimeMs(playbackRequest.segmentStartTimeMs).setVideoPlaybackUstreamerConfig(ustreamerConfig)
-            .addAllPreferredAudioFormatIds(listOfNotNull(audioFormat?.formatId()))
-            .addAllPreferredVideoFormatIds(listOfNotNull(videoFormat?.formatId()))
-            .addAllSelectedFormatIds(initializedFormats.values.map { it.id })
-            .addAllBufferedRanges(initializedFormats.values.flatMap { it.buildBufferedRanges() })
-            .setStreamerContext(StreamerContext.newBuilder().setPoToken(poToken ?: ByteString.empty())
-                .setClientInfo(StreamerContext.ClientInfo.newBuilder().setClientName(101).setClientVersion("1.02")
-                    .setDeviceMake("Apple").setDeviceModel("RealityDevice14,1").setOsName("visionOS")
-                    .setOsVersion("25.6.0.23O471").build())
-                .addAllSabrContexts(activeSabrContexts.mapNotNull { sabrContexts[it] })
-                .addAllUnsentSabrContexts(sabrContexts.keys.filter { it !in activeSabrContexts })
-                .setPlaybackCookie(playbackCookie?.toByteString() ?: ByteString.empty()).build()).build()
+        // Снимок состояния под локом: формат/контексты мутируются из других loader-потоков
+        val abr = withState {
+            val xtags = audioFormat?.formatId()?.xtags?.let { Xtags(it) }
+            val state = ClientAbrState.newBuilder().setPlayerTimeMs(playbackRequest.segmentStartTimeMs)
+                .setEnabledTrackTypesBitfield(if (videoFormat == null) 1 else 0)
+                .setPlaybackRate(playbackRequest.playbackSpeed)
+                .setElapsedWallTimeMs(lastRequestMs?.let { now - it } ?: 0)
+                .setTimeSinceLastSeek(lastSeekMs?.let { now - it } ?: 0)
+                .setTimeSinceLastManualFormatSelectionMs(lastManualFormatSelectionMs?.let { now - it } ?: 0)
+                .setTimeSinceLastActionMs(lastActionMs?.let { now - it } ?: 0)
+                .setAudioTrackId(audioFormat?.streamInfo?.audioTrackId ?: "")
+                .setDrcEnabled(audioFormat?.streamInfo?.isDrc == true || xtags?.isDrcAudio() == true)
+                .setEnableVoiceBoost(xtags?.isVoiceBoosted() ?: false).setClientViewportIsFlexible(false)
+                .setBandwidthEstimate(bandwidthEstimator.bitrateEstimate)
+                .setStickyResolution(max(videoFormat?.streamInfo?.height ?: 0, 360))
+                .setClientViewportHeight(max(videoFormat?.streamInfo?.height ?: 0, 360))
+                .setClientViewportWidth(max(videoFormat?.streamInfo?.width ?: 0, 640))
+                .setLastManualSelectedResolution(max(videoFormat?.streamInfo?.height ?: 0, 360)).setVisibility(1).build()
+            VideoPlaybackAbrRequest.newBuilder().setClientAbrState(state)
+                .setPlayerTimeMs(playbackRequest.segmentStartTimeMs).setVideoPlaybackUstreamerConfig(ustreamerConfig)
+                .addAllPreferredAudioFormatIds(listOfNotNull(audioFormat?.formatId()))
+                .addAllPreferredVideoFormatIds(listOfNotNull(videoFormat?.formatId()))
+                .addAllSelectedFormatIds(initializedFormats.values.map { it.id })
+                .addAllBufferedRanges(initializedFormats.values.flatMap { it.buildBufferedRanges() })
+                .setStreamerContext(StreamerContext.newBuilder().setPoToken(poToken ?: ByteString.empty())
+                    .setClientInfo(StreamerContext.ClientInfo.newBuilder().setClientName(101).setClientVersion("1.02")
+                        .setDeviceMake("Apple").setDeviceModel("RealityDevice14,1").setOsName("visionOS")
+                        .setOsVersion("25.6.0.23O471").build())
+                    .addAllSabrContexts(activeSabrContexts.mapNotNull { sabrContexts[it] })
+                    .addAllUnsentSabrContexts(sabrContexts.keys.filter { it !in activeSabrContexts })
+                    .setPlaybackCookie(playbackCookie?.toByteString() ?: ByteString.empty()).build()).build()
+        }
         val request = Request.Builder().url("$url&rn=${requestNumber++}")
             .addHeader("Content-Type", CONTENT_TYPE).addHeader("Accept-Encoding", ENCODING)
             .addHeader("Accept", ACCEPT).addHeader("Origin", YOUTUBE_FRONTEND_URL)
@@ -377,129 +471,142 @@ class SabrClient private constructor(
     }
 
     private fun processPart(part: Part) {
-        when (part.type) {
-            UMPPartId.MEDIA_HEADER -> {
-                val header = MediaHeader.parseFrom(part.data)
-                if (header.videoId != videoId) throw IOException("Header mismatch")
-                val durationMs = when {
-                    header.hasDurationMs() -> header.durationMs
-                    header.hasTimeRange() && header.timeRange.hasDurationTicks() && header.timeRange.hasTimescale() && header.timeRange.timescale != 0 ->
-                        header.timeRange.durationTicks * 1000L / header.timeRange.timescale
-                    header.hasStartMs() && liveMetadata != null -> 4900L // live estimate: 5s - tolerance, как в SmartTube
-                    else -> 0L
-                }
-                val segment = Segment(
-                    header,
-                    header.sequenceNumber,
-                    mutableListOf(),
-                    durationMs,
-                )
-                partialSegments[header.headerId] = segment
-                Log.i(TAG, "media header: itag=${header.formatId.itag}, headerId=${header.headerId}, " +
-                    "sequence=${header.sequenceNumber}, init=${header.isInitSeg}, " +
-                    "startMs=${header.startMs}, durationMs=${segment.duration}")
-            }
-            UMPPartId.MEDIA -> {
-                val parser = UmpParser(part.data)
-                val id = parser.readVarint()?.toInt() ?: return
-                partialSegments[id]?.data?.add(parser.data())
-            }
-            UMPPartId.MEDIA_END -> {
-                val parser = UmpParser(part.data)
-                val id = parser.readVarint()?.toInt() ?: return
-                val segment = partialSegments.remove(id) ?: return
-                val format = initializedFormats[segment.header.itag]
-                if (format == null) {
-                    pendingSegments.getOrPut(segment.header.itag) { mutableListOf() }.add(segment)
-                    Log.i(TAG, "media segment pending metadata: itag=${segment.header.itag}, " +
-                        "sequence=${segment.sequenceNumber}")
-                    return
-                }
-                storeSegment(format, segment)
-            }
-            UMPPartId.NEXT_REQUEST_POLICY -> {
-                val policy = NextRequestPolicy.parseFrom(part.data)
-                nextRequestPolicy = policy
-                backoffTime = if (policy.hasBackoffTimeMs()) policy.backoffTimeMs else null
-                playbackCookie = if (policy.hasPlaybackCookie()) policy.playbackCookie else null
-                Log.i(TAG, "next request policy: backoffMs=$backoffTime, targetAudio=${if (policy.hasTargetAudioReadaheadMs()) policy.targetAudioReadaheadMs else "null"}, targetVideo=${if (policy.hasTargetVideoReadaheadMs()) policy.targetVideoReadaheadMs else "null"}")
-            }
-            UMPPartId.PLAYBACK_START_POLICY -> {
-                playbackStartPolicy = PlaybackStartPolicy.parseFrom(part.data)
-                Log.d(TAG, "playback start policy received")
-            }
-            UMPPartId.FORMAT_INITIALIZATION_METADATA -> {
-                val metadata = FormatInitializationMetadata.parseFrom(part.data)
-                Log.i(TAG, "format init: itag=${metadata.formatId.itag}, endSegment=${metadata.endSegmentNumber}, endTimeMs=${metadata.endTimeMs}, mime=${metadata.mimeType}")
-                val format = InitializedFormat(
-                    metadata.formatId,
-                    endSegmentNumber = metadata.endSegmentNumber,
-                    duration = metadata.endTimeMs,
-                )
-                initializedFormats[metadata.formatId.itag] = format
-                lastFormatUseMs[metadata.formatId.itag] = SystemClock.elapsedRealtime()
-                val pending = pendingSegments.remove(metadata.formatId.itag)
-                if (pending != null) {
-                    Log.i(TAG, "flushing ${pending.size} pending segments for itag=${metadata.formatId.itag}")
-                    pending.forEach { storeSegment(format, it) }
-                }
-            }
-            UMPPartId.LIVE_METADATA -> {
-                liveMetadata = LiveMetadata.parseFrom(part.data)
-                Log.i(TAG, "live metadata: headSeq=${liveMetadata?.headSequenceNumber}, headTimeMs=${liveMetadata?.headTimeMs}, broadcastId=${liveMetadata?.broadcastId}, minSeekTicks=${if (liveMetadata!!.hasMinSeekableTimeTicks()) liveMetadata!!.minSeekableTimeTicks else "null"}")
-                liveMetadata?.let { liveMetadataListener?.invoke(it) }
-            }
-            UMPPartId.SABR_SEEK -> {
-                val seek = SabrSeek.parseFrom(part.data)
-                if (seek.hasSeekMediaTime() && seek.hasSeekMediaTimescale() && seek.seekMediaTimescale > 0) {
-                    serverSeekTimeMs = seek.seekMediaTime * 1000 / seek.seekMediaTimescale
-                    Log.i(TAG, "server seek: positionMs=$serverSeekTimeMs, " +
-                        "mediaTime=${seek.seekMediaTime}, timescale=${seek.seekMediaTimescale}")
-                }
-            }
-            UMPPartId.SABR_REDIRECT -> {
-                val redirect = SabrRedirect.parseFrom(part.data)
-                Log.i(TAG, "redirect: urlChanged=${url != redirect.url}")
-                url = redirect.url
-            }
-            UMPPartId.SABR_ERROR -> {
-                fatalError = SabrError.parseFrom(part.data)
-                Log.e(TAG, "SABR error: type=${fatalError?.type}, code=${fatalError?.code}")
-                throw IOException("SABR error: ${fatalError?.type}")
-            }
-            UMPPartId.REQUEST_IDENTIFIER -> Log.d(TAG, "REQUEST_IDENTIFIER part received (ignored)")
-            UMPPartId.REQUEST_CANCELLATION_POLICY -> Log.d(TAG, "REQUEST_CANCELLATION_POLICY part received (ignored)")
-            UMPPartId.SABR_CONTEXT_UPDATE -> {
-                try {
-                    val upd = SabrContextUpdate.parseFrom(part.data)
-                    // Convert SabrContextUpdate -> StreamerContext.SabrContext (type+value only)
-                    val ctx = SabrContext.newBuilder().setType(upd.type).setValue(upd.value).build()
-                    if (upd.hasWritePolicy() && upd.writePolicy == SabrContextWritePolicy.KEEP_EXISTING && sabrContexts.containsKey(upd.type)) {
-                        Log.d(TAG, "skipping KEEP_EXISTING context type=${upd.type}")
-                    } else {
-                        sabrContexts[upd.type] = ctx
-                        if (upd.hasSendByDefault() && upd.sendByDefault) activeSabrContexts.add(upd.type)
-                        Log.i(TAG, "sabr context update: type=${upd.type}, sendByDefault=${upd.sendByDefault}, writePolicy=${upd.writePolicy}")
+        var liveMeta: LiveMetadata? = null
+        withState {
+            when (part.type) {
+                UMPPartId.MEDIA_HEADER -> {
+                    val header = MediaHeader.parseFrom(part.data)
+                    if (header.videoId != videoId) throw IOException("Header mismatch")
+                    val durationMs = when {
+                        header.hasDurationMs() -> header.durationMs
+                        header.hasTimeRange() && header.timeRange.hasDurationTicks() && header.timeRange.hasTimescale() && header.timeRange.timescale != 0 ->
+                            header.timeRange.durationTicks * 1000L / header.timeRange.timescale
+                        header.hasStartMs() && liveMetadata != null -> 4900L // live estimate: 5s - tolerance, как в SmartTube
+                        else -> 0L
                     }
-                } catch (e: Exception) { Log.w(TAG, "failed to parse SABR_CONTEXT_UPDATE: $e") }
+                    val segment = Segment(
+                        header,
+                        header.sequenceNumber,
+                        mutableListOf(),
+                        durationMs,
+                    )
+                    partialSegments[header.headerId] = segment
+                    Log.i(TAG, "media header: itag=${header.formatId.itag}, headerId=${header.headerId}, " +
+                        "sequence=${header.sequenceNumber}, init=${header.isInitSeg}, " +
+                        "startMs=${header.startMs}, durationMs=${segment.duration}")
+                }
+                UMPPartId.MEDIA -> {
+                    val parser = UmpParser(part.data)
+                    val id = parser.readVarint()?.toInt() ?: return@withState
+                    partialSegments[id]?.data?.add(parser.data())
+                }
+                UMPPartId.MEDIA_END -> {
+                    val parser = UmpParser(part.data)
+                    val id = parser.readVarint()?.toInt() ?: return@withState
+                    val segment = partialSegments.remove(id) ?: return@withState
+                    val format = initializedFormats[segment.header.itag]
+                    if (format == null) {
+                        pendingSegments.getOrPut(segment.header.itag) { mutableListOf() }.add(segment)
+                        Log.i(TAG, "media segment pending metadata: itag=${segment.header.itag}, " +
+                            "sequence=${segment.sequenceNumber}")
+                        return@withState
+                    }
+                    storeSegment(format, segment)
+                }
+                UMPPartId.NEXT_REQUEST_POLICY -> {
+                    val policy = NextRequestPolicy.parseFrom(part.data)
+                    nextRequestPolicy = policy
+                    backoffTime = if (policy.hasBackoffTimeMs()) policy.backoffTimeMs else null
+                    playbackCookie = if (policy.hasPlaybackCookie()) policy.playbackCookie else null
+                    Log.i(TAG, "next request policy: backoffMs=$backoffTime, targetAudio=${if (policy.hasTargetAudioReadaheadMs()) policy.targetAudioReadaheadMs else "null"}, targetVideo=${if (policy.hasTargetVideoReadaheadMs()) policy.targetVideoReadaheadMs else "null"}")
+                }
+                UMPPartId.PLAYBACK_START_POLICY -> {
+                    playbackStartPolicy = PlaybackStartPolicy.parseFrom(part.data)
+                    Log.d(TAG, "playback start policy received")
+                }
+                UMPPartId.FORMAT_INITIALIZATION_METADATA -> {
+                    val metadata = FormatInitializationMetadata.parseFrom(part.data)
+                    Log.i(TAG, "format init: itag=${metadata.formatId.itag}, endSegment=${metadata.endSegmentNumber}, endTimeMs=${metadata.endTimeMs}, mime=${metadata.mimeType}")
+                    val format = InitializedFormat(
+                        metadata.formatId,
+                        endSegmentNumber = metadata.endSegmentNumber,
+                        duration = metadata.endTimeMs,
+                    )
+                    initializedFormats[metadata.formatId.itag] = format
+                    lastFormatUseMs[metadata.formatId.itag] = SystemClock.elapsedRealtime()
+                    val pending = pendingSegments.remove(metadata.formatId.itag)
+                    if (pending != null) {
+                        Log.i(TAG, "flushing ${pending.size} pending segments for itag=${metadata.formatId.itag}")
+                        pending.forEach { storeSegment(format, it) }
+                    }
+                }
+                UMPPartId.LIVE_METADATA -> {
+                    val meta = LiveMetadata.parseFrom(part.data)
+                    liveMetadata = meta
+                    // Фиксируем начало DVR-окна ПЕРВЫМ значением minSeekable — домен времени чанков
+                    // (windowPos = time − windowStart) не должен плыть вместе со скользящим окном.
+                    if (liveWindowStartMs == null) {
+                        liveWindowStartMs = meta.takeIf {
+                            it.hasMinSeekableTimeTicks() && it.hasMinSeekableTimescale() && it.minSeekableTimescale != 0
+                        }?.let { it.minSeekableTimeTicks * 1000L / it.minSeekableTimescale } ?: 0L
+                    }
+                    Log.i(TAG, "live metadata: headSeq=${meta.headSequenceNumber}, headTimeMs=${meta.headTimeMs}, broadcastId=${meta.broadcastId}, minSeekTicks=${if (meta.hasMinSeekableTimeTicks()) meta.minSeekableTimeTicks else "null"}, windowStartMs=$liveWindowStartMs")
+                    liveMeta = meta
+                }
+                UMPPartId.SABR_SEEK -> {
+                    val seek = SabrSeek.parseFrom(part.data)
+                    if (seek.hasSeekMediaTime() && seek.hasSeekMediaTimescale() && seek.seekMediaTimescale > 0) {
+                        serverSeekTimeMs = seek.seekMediaTime * 1000 / seek.seekMediaTimescale
+                        Log.i(TAG, "server seek: positionMs=$serverSeekTimeMs, " +
+                            "mediaTime=${seek.seekMediaTime}, timescale=${seek.seekMediaTimescale}")
+                    }
+                }
+                UMPPartId.SABR_REDIRECT -> {
+                    val redirect = SabrRedirect.parseFrom(part.data)
+                    Log.i(TAG, "redirect: urlChanged=${url != redirect.url}")
+                    url = redirect.url
+                }
+                UMPPartId.SABR_ERROR -> {
+                    fatalError = SabrError.parseFrom(part.data)
+                    Log.e(TAG, "SABR error: type=${fatalError?.type}, code=${fatalError?.code}")
+                    throw IOException("SABR error: ${fatalError?.type}")
+                }
+                UMPPartId.REQUEST_IDENTIFIER -> Log.d(TAG, "REQUEST_IDENTIFIER part received (ignored)")
+                UMPPartId.REQUEST_CANCELLATION_POLICY -> Log.d(TAG, "REQUEST_CANCELLATION_POLICY part received (ignored)")
+                UMPPartId.SABR_CONTEXT_UPDATE -> {
+                    try {
+                        val upd = SabrContextUpdate.parseFrom(part.data)
+                        // Convert SabrContextUpdate -> StreamerContext.SabrContext (type+value only)
+                        val ctx = SabrContext.newBuilder().setType(upd.type).setValue(upd.value).build()
+                        if (upd.hasWritePolicy() && upd.writePolicy == SabrContextWritePolicy.KEEP_EXISTING && sabrContexts.containsKey(upd.type)) {
+                            Log.d(TAG, "skipping KEEP_EXISTING context type=${upd.type}")
+                        } else {
+                            sabrContexts[upd.type] = ctx
+                            if (upd.hasSendByDefault() && upd.sendByDefault) activeSabrContexts.add(upd.type)
+                            Log.i(TAG, "sabr context update: type=${upd.type}, sendByDefault=${upd.sendByDefault}, writePolicy=${upd.writePolicy}")
+                        }
+                    } catch (e: Exception) { Log.w(TAG, "failed to parse SABR_CONTEXT_UPDATE: $e") }
+                }
+                UMPPartId.SABR_CONTEXT_SENDING_POLICY -> {
+                    try {
+                        val pol = SabrContextSendingPolicy.parseFrom(part.data)
+                        pol.startPolicyList.forEach { activeSabrContexts.add(it) }
+                        pol.stopPolicyList.forEach { activeSabrContexts.remove(it) }
+                        pol.discardPolicyList.forEach { sabrContexts.remove(it); activeSabrContexts.remove(it) }
+                        Log.i(TAG, "sabr context sending policy: start=${pol.startPolicyList}, stop=${pol.stopPolicyList}, discard=${pol.discardPolicyList}")
+                    } catch (e: Exception) { Log.w(TAG, "failed to parse SABR_CONTEXT_SENDING_POLICY: $e") }
+                }
+                UMPPartId.STREAM_PROTECTION_STATUS -> {
+                    try {
+                        val s = StreamProtectionStatus.parseFrom(part.data)
+                        Log.i(TAG, "stream protection: status=${s.status}")
+                    } catch (e: Exception) { Log.w(TAG, "failed to parse STREAM_PROTECTION_STATUS: $e") }
+                }
+                else -> Log.w(TAG, "Unhandled UMP part: ${part.type} size=${part.data.size}")
             }
-            UMPPartId.SABR_CONTEXT_SENDING_POLICY -> {
-                try {
-                    val pol = SabrContextSendingPolicy.parseFrom(part.data)
-                    pol.startPolicyList.forEach { activeSabrContexts.add(it) }
-                    pol.stopPolicyList.forEach { activeSabrContexts.remove(it) }
-                    pol.discardPolicyList.forEach { sabrContexts.remove(it); activeSabrContexts.remove(it) }
-                    Log.i(TAG, "sabr context sending policy: start=${pol.startPolicyList}, stop=${pol.stopPolicyList}, discard=${pol.discardPolicyList}")
-                } catch (e: Exception) { Log.w(TAG, "failed to parse SABR_CONTEXT_SENDING_POLICY: $e") }
-            }
-            UMPPartId.STREAM_PROTECTION_STATUS -> {
-                try {
-                    val s = StreamProtectionStatus.parseFrom(part.data)
-                    Log.i(TAG, "stream protection: status=${s.status}")
-                } catch (e: Exception) { Log.w(TAG, "failed to parse STREAM_PROTECTION_STATUS: $e") }
-            }
-            else -> Log.w(TAG, "Unhandled UMP part: ${part.type} size=${part.data.size}")
         }
+        // Уведомляем слушателя ВНЕ лока: он обновляет таймлайн MediaSource (refreshSourceInfo)
+        liveMeta?.let { liveMetadataListener?.invoke(it) }
     }
 
     private fun storeSegment(format: InitializedFormat, segment: Segment) {
@@ -522,7 +629,8 @@ class SabrClient private constructor(
         private const val YOUTUBE_FRONTEND_URL = "https://www.youtube.com"
         private const val LIVE_REQUEST_RETRIES = 3
         private const val LIVE_RETRY_DELAY_MS = 250L
-        /** максимальное расхождение по времени (мс) для фолбэка «по времени» — чтобы не отдавать рандомный чанк */
-        private const val LIVE_TIME_TOLERANCE_MS = 30_000L
+        /** максимальное расхождение по времени (мс) для тайм-матча — около 2.5 live-сегментов.
+         *  Было 30_000: фолбэк молча отдавал чанк до 30с не от запрошенного места → рассинхрон. */
+        private const val LIVE_TIME_TOLERANCE_MS = 12_500L
     }
 }
