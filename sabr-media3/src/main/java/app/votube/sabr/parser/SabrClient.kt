@@ -146,8 +146,20 @@ class SabrClient private constructor(
     init { poTokenProvider?.getStreamingPoToken(videoId)?.let { poToken = ByteString.copyFrom(it) } }
 
     fun selectFormat(representation: Representation) {
-        if (MimeTypes.isAudio(representation.format.containerMimeType)) audioFormat = representation
-        else if (MimeTypes.isVideo(representation.format.containerMimeType)) videoFormat = representation
+        if (MimeTypes.isAudio(representation.format.containerMimeType)) {
+            if (audioFormat?.streamInfo?.itag != representation.streamInfo.itag) {
+                Log.i(TAG, "format changed: track=audio, itag=${representation.streamInfo.itag}, " +
+                    "mime=${representation.format.containerMimeType}, codec=${representation.format.codecs}")
+            }
+            audioFormat = representation
+        } else if (MimeTypes.isVideo(representation.format.containerMimeType)) {
+            if (videoFormat?.streamInfo?.itag != representation.streamInfo.itag) {
+                Log.i(TAG, "format changed: track=video, itag=${representation.streamInfo.itag}, " +
+                    "resolution=${representation.streamInfo.width}x${representation.streamInfo.height}, " +
+                    "mime=${representation.format.containerMimeType}, codec=${representation.format.codecs}")
+            }
+            videoFormat = representation
+        }
     }
 
     fun getEndSegmentNumber(formatId: FormatId): Long? = initializedFormats[formatId.itag]?.endSegmentNumber
@@ -285,10 +297,17 @@ class SabrClient private constructor(
             UMPPartId.LIVE_METADATA -> liveMetadata = LiveMetadata.parseFrom(part.data)
             UMPPartId.SABR_SEEK -> {
                 val seek = SabrSeek.parseFrom(part.data)
-                if (seek.hasSeekMediaTime() && seek.hasSeekMediaTimescale() && seek.seekMediaTimescale > 0)
+                if (seek.hasSeekMediaTime() && seek.hasSeekMediaTimescale() && seek.seekMediaTimescale > 0) {
                     serverSeekTimeMs = seek.seekMediaTime * 1000 / seek.seekMediaTimescale
+                    Log.i(TAG, "server seek: positionMs=$serverSeekTimeMs, " +
+                        "mediaTime=${seek.seekMediaTime}, timescale=${seek.seekMediaTimescale}")
+                }
             }
-            UMPPartId.SABR_REDIRECT -> url = SabrRedirect.parseFrom(part.data).url
+            UMPPartId.SABR_REDIRECT -> {
+                val redirect = SabrRedirect.parseFrom(part.data)
+                Log.i(TAG, "redirect: urlChanged=${url != redirect.url}")
+                url = redirect.url
+            }
             UMPPartId.SABR_ERROR -> {
                 fatalError = SabrError.parseFrom(part.data)
                 throw IOException("SABR error: ${fatalError?.type}")

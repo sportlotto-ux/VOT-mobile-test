@@ -137,6 +137,12 @@ class SabrMediaPeriod(
         val now = SystemClock.elapsedRealtime()
         sabrClient.lastManualFormatSelectionMs = now
         sabrClient.lastActionMs = now
+        android.util.Log.i(
+            "SabrMediaPeriod",
+            "track selection changed: positionMs=${positionUs / 1000}, " +
+                "audio=${selections.getOrNull(0)?.selectedFormat?.id}, " +
+                "video=${selections.getOrNull(1)?.selectedFormat?.id}"
+        )
 
         val sampleStreamList: MutableList<ChunkSampleStream<SabrChunkSource?>> = mutableListOf()
         for (sampleStream in streams) {
@@ -181,6 +187,7 @@ class SabrMediaPeriod(
     override fun getBufferedPositionUs(): Long = compositeSequenceableLoader.bufferedPositionUs
 
     override fun seekToUs(positionUs: Long): Long {
+        android.util.Log.i("SabrMediaPeriod", "seek: positionMs=${positionUs / 1000}")
         sampleStreams.forEach { it.seekToUs(positionUs) }
         return positionUs
     }

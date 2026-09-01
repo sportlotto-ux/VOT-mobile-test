@@ -174,7 +174,9 @@ class DefaultSabrChunkSource(
         android.util.Log.i(
             "SabrChunkSource",
             "getNextChunk: queue=${queue.size}, loadPositionUs=$loadPositionUs, " +
-                "selectedIndex=${trackSelection.selectedIndex}"
+                "selectedIndex=${trackSelection.selectedIndex}, " +
+                "itag=${trackSelection.selectedFormat.id}, " +
+                "resolution=${trackSelection.selectedFormat.width}x${trackSelection.selectedFormat.height}"
         )
         val playbackPositionUs = loadingInfo.playbackPositionUs
         val bufferedDurationUs = loadPositionUs - playbackPositionUs
