@@ -47,6 +47,9 @@ jobs:
       - name: Build sabr-media3 module
         run: ./gradlew :sabr-media3:assembleRelease
 
+      - name: Run sabr-media3 unit tests
+        run: ./gradlew :sabr-media3:testDebugUnitTest
+
       - name: Lint with Gradle
         run: ./gradlew lintStbetaDebug
 

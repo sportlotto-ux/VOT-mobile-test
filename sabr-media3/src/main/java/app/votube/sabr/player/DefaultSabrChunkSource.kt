@@ -211,39 +211,109 @@ class DefaultSabrChunkSource(
             chunkIterators,
         )
 
-        if (representationHolder.chunkIndex == null && queue.isEmpty()) {
-            // when we request a new format, it should start with an initialization chunk
+        if (representationHolder.chunkIndex == null) {
+            // SABR is server-driven: the container index is only built once media fragments
+            // (moof/mdat) have been parsed, so it may be absent until the first media chunk
+            // loads. Never signal EOS here and never re-request initialization.
+            if (!representationHolder.initializationRequested && queue.isEmpty()) {
+                // when we request a new format, it should start with an initialization chunk
+                val dataSpec = DataSpec.Builder()
+                    // must be non-null, but is unused
+                    .setUri(manifest.serverAbrStreamingUri)
+                    .setCustomData(
+                        PlaybackRequest.initRequest(
+                            representationHolder.representation.formatId(),
+                            Util.usToMs(playbackPositionUs),
+                            loadingInfo.playbackSpeed,
+                        )
+                    )
+                    .build()
+
+                android.util.Log.i(
+                    "SabrChunkSource",
+                    "requesting initialization: itag=${representationHolder.representation.streamInfo.itag}"
+                )
+                out.chunk = InitializationChunk(
+                    dataSource,
+                    dataSpec,
+                    trackSelection.selectedFormat,
+                    trackSelection.selectionReason,
+                    trackSelection.selectionData,
+                    representationHolder.chunkExtractor
+                        ?: throw IllegalStateException("SABR chunk extractor is unavailable")
+                )
+                return
+            }
+
+            if (!representationHolder.initializationRequested) {
+                // Initialization is still loading; there is nothing to request yet.
+                return
+            }
+
+            // Initialization completed but the extractor has not produced an index yet.
+            // Request the next media segment using server metadata (endSegmentNumber)
+            // instead of a client-built ChunkIndex.
+            val segmentNum = previousChunk?.nextChunkIndex ?: 0
+            val endSegmentNumber = sabrClient.getEndSegmentNumber(
+                representationHolder.representation.formatId()
+            )
+            if (endSegmentNumber != null && endSegmentNumber > 0) {
+                val lastAvailableSegmentNum = endSegmentNumber - 1
+                if (segmentNum > lastAvailableSegmentNum
+                    || (missingLastSegment && segmentNum >= lastAvailableSegmentNum)) {
+                    // The segment is beyond the end of the stream (VOD).
+                    out.endOfStream = true
+                    return
+                }
+            }
+
+            val startTimeUs = previousChunk?.endTimeUs ?: loadPositionUs
+            if (startTimeUs >= representationHolder.periodDurationUs) {
+                // The period duration clips the period to a position before the segment.
+                out.endOfStream = true
+                return
+            }
+            val endTimeUs = startTimeUs + representationHolder.lastSegmentDurationUs
+            val seekTimeUs = if (queue.isEmpty()) loadPositionUs else C.TIME_UNSET
+
+            // use the queue to build the buffered segments
+            // each queue media chunk corresponds to 1 segment
+            val bufferedSegments = queue.mapNotNull { (it.dataSpec.customData as PlaybackRequest?)?.segment }
             val dataSpec = DataSpec.Builder()
                 // must be non-null, but is unused
                 .setUri(manifest.serverAbrStreamingUri)
-                .setCustomData(
-                    PlaybackRequest.initRequest(
-                        representationHolder.representation.formatId(),
-                        Util.usToMs(playbackPositionUs),
-                        loadingInfo.playbackSpeed,
-                    )
-                )
+                .setCustomData(PlaybackRequest(
+                    representationHolder.representation.formatId(),
+                    Util.usToMs(playbackPositionUs),
+                    loadingInfo.playbackSpeed,
+                    // SABR sequence numbers count the index segment as 0
+                    segmentNum + 1,
+                    Util.usToMs(startTimeUs),
+                    bufferedSegments,
+                ))
                 .build()
 
             android.util.Log.i(
                 "SabrChunkSource",
-                "requesting initialization: itag=${representationHolder.representation.streamInfo.itag}"
+                "requesting segment (pre-index): index=$segmentNum, sabrSegment=${segmentNum + 1}, " +
+                    "endSegmentNumber=$endSegmentNumber"
             )
-            out.chunk = InitializationChunk(
+            out.chunk = ContainerMediaChunk(
                 dataSource,
                 dataSpec,
                 trackSelection.selectedFormat,
                 trackSelection.selectionReason,
                 trackSelection.selectionData,
+                startTimeUs,
+                endTimeUs,
+                seekTimeUs,
+                representationHolder.periodDurationUs,
+                segmentNum,
+                1,
+                0,
                 representationHolder.chunkExtractor
                     ?: throw IllegalStateException("SABR chunk extractor is unavailable")
             )
-            return
-        }
-
-        if (representationHolder.chunkIndex == null) {
-            // Initialization has not produced a container index yet. Do not signal EOS: the
-            // selected SABR media segment must be allowed to load and populate the extractor.
             return
         }
 
@@ -317,18 +387,33 @@ class DefaultSabrChunkSource(
     }
 
     override fun onChunkLoadCompleted(chunk: Chunk) {
+        val trackIndex = trackSelection.indexOf(chunk.trackFormat)
+        if (trackIndex == C.INDEX_UNSET || trackIndex !in representationHolders.indices) {
+            return
+        }
+        val representationHolder = representationHolders[trackIndex]
         if (chunk is InitializationChunk) {
-            val trackIndex = trackSelection.indexOf(chunk.trackFormat)
-            if (trackIndex == C.INDEX_UNSET || trackIndex !in representationHolders.indices) {
-                return
-            }
-            val representationHolder = representationHolders[trackIndex]
-            representationHolder.chunkExtractor?.chunkIndex?.let { chunkIndex ->
+            representationHolder.initializationRequested = true
+        }
+        // The extractor builds the index from media fragments, so it may only become
+        // available after a media chunk (not the init chunk) has been parsed.
+        representationHolder.chunkExtractor?.chunkIndex?.let { chunkIndex ->
+            if (representationHolder.chunkIndex !== chunkIndex) {
                 representationHolder.chunkIndex = chunkIndex
                 android.util.Log.i(
                     "SabrChunkSource",
-                    "initialization completed: track=$trackIndex, segments=${chunkIndex.length}"
+                    "index available: track=$trackIndex, segments=${chunkIndex.length}"
                 )
+            }
+        }
+        // Keep the segment duration accumulator up to date so media chunks can be
+        // scheduled with correct end times while no container index is available.
+        // NOTE: Chunk.dataSource is protected in media3 1.4.1 — all chunks here are
+        // created by this source against `this.dataSource`, so check that instead.
+        if (chunk is MediaChunk && dataSource is SabrDataSource) {
+            val durationUs = (dataSource as SabrDataSource).lastSegmentDurationUs
+            if (durationUs > 0) {
+                representationHolder.lastSegmentDurationUs = durationUs
             }
         }
     }
@@ -439,6 +524,8 @@ class DefaultSabrChunkSource(
         val chunkExtractor: ChunkExtractor?,
     ) {
         var chunkIndex: ChunkIndex? = null
+        var initializationRequested = false
+        var lastSegmentDurationUs = 0L
 
         val segmentCount: Long
             get() = chunkIndex?.length?.toLong() ?: 0

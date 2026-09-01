@@ -19,6 +19,14 @@ class SabrDataSource(
 ) : BaseDataSource(true) {
     private var data: CompositeBuffer? = null
 
+    /**
+     * Duration in microseconds of the last served segment, or 0 if unknown.
+     * Used by [DefaultSabrChunkSource] to schedule media chunks with correct end
+     * times while the extractor has not produced a container index yet.
+     */
+    var lastSegmentDurationUs: Long = 0
+        private set
+
     class Factory(
         private val sabrClient: SabrClient
     ) : DataSource.Factory {
@@ -49,6 +57,7 @@ class SabrDataSource(
         }
 
         data = CompositeBuffer(segment.data)
+        lastSegmentDurationUs = segment.duration * 1000L
         return data?.remaining()?.toLong() ?: 0L
     }
 
@@ -56,6 +65,7 @@ class SabrDataSource(
 
     override fun close() {
         data = null
+        lastSegmentDurationUs = 0
         transferEnded()
     }
 

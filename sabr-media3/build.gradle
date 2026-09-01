@@ -53,6 +53,8 @@ dependencies {
     implementation project(':sharedutils')
     implementation 'com.squareup.okhttp3:okhttp:' + okhttpVersion
     implementation 'com.google.protobuf:protobuf-javalite:' + protobufLiteVersion
+
+    testImplementation 'junit:junit:4.13.2'
 }
 
 protobuf {
