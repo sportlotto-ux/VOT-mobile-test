@@ -384,6 +384,15 @@ class DefaultSabrChunkSource(
                         android.util.Log.w("SabrChunkSource", "live sequential clamp: segmentNum $segmentNum > headSeq $headSeq -> $headSeq")
                         segmentNum = headSeq
                     }
+                    // Синхронизация A/V: аудио и видео ChunkSource имеют раздельные очереди/previousChunk,
+                    // поэтому могут разъехаться на 5-10с (видео 2247470, аудио 2247468). Тогда видео фризит,
+                    // аудио доигрывает старый кусок и повторяется. Для live подтягиваем отставший трек к голове:
+                    // если max(lastReturned) сильно впереди (>1 сегмент), берём max как базу.
+                    val maxLast = sabrClient.getMaxLastReturnedSequence()
+                    if (headSeq != null && maxLast != null && maxLast > segmentNum + 1) {
+                        android.util.Log.w("SabrChunkSource", "live A/V sync: itag=${representationHolder.representation.streamInfo.itag} segment $segmentNum lags max $maxLast -> jump to ${maxLast}")
+                        segmentNum = maxLast
+                    }
                     val estDurationMs = if (representationHolder.lastSegmentDurationUs > 0) representationHolder.lastSegmentDurationUs / 1000 else 5000L
                     if (headSeq != null && headTimeMs != null) {
                         requestedTimeMs = headTimeMs - (headSeq - segmentNum) * estDurationMs
@@ -393,7 +402,7 @@ class DefaultSabrChunkSource(
                         val minSeekForSeq = minSeekMs ?: 0L
                         requestedTimeMs = minSeekForSeq + Util.usToMs(previousChunk.endTimeUs)
                     }
-                    android.util.Log.i("SabrChunkSource", "live sequential: segmentNum=$segmentNum headSeq=$headSeq headTimeMs=$headTimeMs -> requestedTimeMs=$requestedTimeMs")
+                    android.util.Log.i("SabrChunkSource", "live sequential: segmentNum=$segmentNum headSeq=$headSeq headTimeMs=$headTimeMs -> requestedTimeMs=$requestedTimeMs itag=${representationHolder.representation.streamInfo.itag}")
                 }
                 android.util.Log.i(
                     "SabrChunkSource",
@@ -415,14 +424,12 @@ class DefaultSabrChunkSource(
 
             // Live: start должен соответствовать window-позиции запрошенного времени (requestedTimeMs - minSeek),
             // иначе получаем огромный readahead -11237с (load 0 vs playback head) и постоянный ABR 144p + фризы.
-            // Для initial (previousChunk==null) берём window-позицию requestedTime, для sequential — продолжаем от предыдущего.
+            // Для A/V синхронизации берём window-позицию requestedTime и для sequential, а не per-track previousChunk.endTimeUs,
+            // иначе аудио (2247468) и видео (2247470) разъезжаются на 10с → видео фризит, аудио повторяет старый кусок.
             val startTimeUs = if (isLive) {
-                if (previousChunk != null) previousChunk.endTimeUs
-                else {
-                    val windowStartMs = minSeekMs ?: 0L
-                    val windowPosMs = (requestedTimeMs - windowStartMs).coerceIn(0L, 120_000L) // clamp к окну/2мин max
-                    Util.msToUs(windowPosMs)
-                }
+                val windowStartMs = sabrClient.getMinSeekableTimeMs() ?: 0L
+                val windowPosMs = (requestedTimeMs - windowStartMs).coerceIn(0L, 300_000L) // до 5мин окна
+                Util.msToUs(windowPosMs)
             } else previousChunk?.endTimeUs ?: loadPositionUs
             if (!isLive && startTimeUs >= representationHolder.periodDurationUs) {
                 // The period duration clips the period to a position before the segment.

@@ -189,6 +189,7 @@ class SabrClient private constructor(
     /** sequence последнего отданного сегмента для itag, или null если ещё не отдавали.
      *  ChunkSource использует его, чтобы следующий live-запрос шёл от реальной нумерации сервера. */
     fun getLastReturnedSequence(itag: Int): Long? = lastReturnedSequenceByItag[itag]
+    fun getMaxLastReturnedSequence(): Long? = lastReturnedSequenceByItag.values.maxOrNull()
 
     fun getMinSeekableTimeMs(): Long? = liveMetadata?.let {
         if (it.hasMinSeekableTimeTicks() && it.hasMinSeekableTimescale() && it.minSeekableTimescale != 0)
