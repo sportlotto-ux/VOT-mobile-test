@@ -254,8 +254,8 @@ class SabrClient private constructor(
                         val headTime = liveMetadata?.headTimeMs
                         val serverSeek = serverSeekTimeMs // не consume здесь, пусть ChunkSource решает
                         Log.w(TAG, "live fallback: requested ${playbackRequest.segment} not found, available=$avail, headSeq=$headSeq, headTimeMs=$headTime, serverSeekMs=$serverSeek, requestedTimeMs=${playbackRequest.segmentStartTimeMs}")
-                        // 1) Если сервер прислал SABR_SEEK — берём сегмент ближайший к serverSeek
-                        if (serverSeek != null) {
+                        // 1) Если сервер прислал SABR_SEEK — берём только на старте/seek (requested <=10), иначе последовательные идут по порядку
+                        if (serverSeek != null && playbackRequest.segment <= 10) {
                             val bySeek = fallbackFormat.downloadedSegments.values.minByOrNull { kotlin.math.abs(it.header.startMs - serverSeek) }
                             if (bySeek != null) {
                                 val seg = fallbackFormat.getSegment(bySeek.sequenceNumber)
@@ -265,6 +265,9 @@ class SabrClient private constructor(
                                     return@withContext seg
                                 }
                             }
+                        } else if (serverSeek != null) {
+                            // для последовательных — просто чистим устаревший seek, не делаем фолбэк
+                            serverSeekTimeMs = null
                         }
                         // 2) Если запросили начало (1/2), а голова 6087 — стартуем с головы (live edge)
                         if (headSeq != null && playbackRequest.segment <= 10 && headSeq > 100) {
@@ -280,18 +283,20 @@ class SabrClient private constructor(
                                 }
                             }
                         }
-                        // 3) DVR rewind: ищем сегмент по пройденному времени (elapsed), чтобы можно было вернуться к началу
-                        val byTime = fallbackFormat.downloadedSegments.values.minByOrNull { kotlin.math.abs(it.header.startMs - playbackRequest.segmentStartTimeMs) }
-                        // берём только если близко по времени (< 10 сек) чтобы не отдавать рандом
-                        if (byTime != null && kotlin.math.abs(byTime.header.startMs - playbackRequest.segmentStartTimeMs) < 10_000) {
-                            val seg = fallbackFormat.getSegment(byTime.sequenceNumber)
-                            if (seg != null) {
-                                Log.i(TAG, "live time fallback: returning seq ${byTime.sequenceNumber} startMs=${byTime.header.startMs} ~ requestedTime ${playbackRequest.segmentStartTimeMs}")
-                                return@withContext seg
+                        // 3) DVR rewind: только для старта/seek (requested <=10), иначе последовательные не трогаем
+                        if (playbackRequest.segment <= 10) {
+                            val byTime = fallbackFormat.downloadedSegments.values.minByOrNull { kotlin.math.abs(it.header.startMs - playbackRequest.segmentStartTimeMs) }
+                            // берём только если близко по времени (< 5 сек) чтобы не отдавать рандом
+                            if (byTime != null && kotlin.math.abs(byTime.header.startMs - playbackRequest.segmentStartTimeMs) < 5_000) {
+                                val seg = fallbackFormat.getSegment(byTime.sequenceNumber)
+                                if (seg != null) {
+                                    Log.i(TAG, "live time fallback: returning seq ${byTime.sequenceNumber} startMs=${byTime.header.startMs} ~ requestedTime ${playbackRequest.segmentStartTimeMs}")
+                                    return@withContext seg
+                                }
                             }
                         }
-                        // 4) последний шанс — ближайший к голове для live edge
-                        if (headSeq != null) {
+                        // 4) последний шанс — ближайший к голове только для старта
+                        if (headSeq != null && playbackRequest.segment <= 10) {
                             val nearestHead = avail.minByOrNull { kotlin.math.abs(it - headSeq) }
                             if (nearestHead != null) {
                                 val seg = fallbackFormat.getSegment(nearestHead)
@@ -368,11 +373,18 @@ class SabrClient private constructor(
             UMPPartId.MEDIA_HEADER -> {
                 val header = MediaHeader.parseFrom(part.data)
                 if (header.videoId != videoId) throw IOException("Header mismatch")
+                val durationMs = when {
+                    header.hasDurationMs() -> header.durationMs
+                    header.hasTimeRange() && header.timeRange.hasDurationTicks() && header.timeRange.hasTimescale() && header.timeRange.timescale != 0 ->
+                        header.timeRange.durationTicks * 1000L / header.timeRange.timescale
+                    header.hasStartMs() && liveMetadata != null -> 4900L // live estimate: 5s - tolerance, как в SmartTube
+                    else -> 0L
+                }
                 val segment = Segment(
                     header,
                     header.sequenceNumber,
                     mutableListOf(),
-                    if (header.hasDurationMs()) header.durationMs else 0,
+                    durationMs,
                 )
                 partialSegments[header.headerId] = segment
                 Log.i(TAG, "media header: itag=${header.formatId.itag}, headerId=${header.headerId}, " +
