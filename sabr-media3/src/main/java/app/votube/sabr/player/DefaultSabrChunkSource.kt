@@ -207,39 +207,48 @@ class DefaultSabrChunkSource(
         // Adaptive track selection may change the selected format when `updateSelectedTrack` is called.
         // This can lead to playback errors if only one stream changes. We artificially delay this by only
         // changing the format on the next selection, ensuring there is some data already buffered.
-        val representationHolder = representationHolders[trackSelection.selectedIndex]
+        var representationHolder = representationHolders[trackSelection.selectedIndex]
         sabrClient.selectFormat(representationHolder.representation)
-        // Hysteresis for live ABR: avoid spiral downgrades when readahead dips transiently
-        // (segment mismatch, multiplexed response delay). Suppress rapid successive switches
-        // unless buffer is critically low — mirrors browser client's hysteresis.
+        // Hysteresis for live ABR: avoid spiral downgrades and start-at-144p.
+        // Было: suppress только если !critical && queue>=2 — на старте buffer 0 < min (2000) => critical true,
+        // поэтому сразу даунгрейд к 144p. Теперь подавляем даунгрейд 10с даже при critical, если буфер >500мс
+        // и очередь не пуста — держим высокое качество первые секунды, даём буферу набраться.
         val nowMs = SystemClock.elapsedRealtime()
         val timeSinceSwitchMs = nowMs - lastTrackSwitchMs
         val bufferedMs = Util.usToMs(bufferedDurationUs)
         val isRecentlySwitched = lastTrackSwitchMs != 0L && timeSinceSwitchMs < 10_000
-        val minReadaheadMs = sabrClient.getMinReadaheadMs(representationHolder.representation) ?: 2_000
-        val isBufferCritical = bufferedMs < minReadaheadMs || queue.isEmpty()
         val beforeIndex = trackSelection.selectedIndex
-        if (isLive && isRecentlySwitched && !isBufferCritical && queue.size >= 2) {
+        val beforeFormat = trackSelection.selectedFormat
+        trackSelection.updateSelectedTrack(
+            playbackPositionUs,
+            bufferedDurationUs,
+            C.TIME_UNSET,
+            queue,
+            chunkIterators,
+        )
+        val afterIndex = trackSelection.selectedIndex
+        val isDowngrade = afterIndex != beforeIndex && trackSelection.getFormat(afterIndex).bitrate < beforeFormat.bitrate
+        val shouldSuppressDowngrade = isLive && isRecentlySwitched && isDowngrade && queue.size >= 1 && bufferedMs > 500
+        if (shouldSuppressDowngrade) {
             android.util.Log.i(
                 "SabrChunkSource",
-                "ABR hysteresis: suppress switch (recent ${timeSinceSwitchMs}ms ago, buf=${bufferedMs}ms, queue=${queue.size})"
+                "ABR hysteresis: suppress downgrade $beforeIndex -> $afterIndex (recent ${timeSinceSwitchMs}ms ago, buf=${bufferedMs}ms, queue=${queue.size})"
             )
+            // Для текущего чанка используем старый holder (высокое качество), селектор остаётся на низком
+            // но следующий getNextChunk снова предложит даунгрейд и снова подавит — держим 10с
+            representationHolder = representationHolders[beforeIndex]
         } else {
-            trackSelection.updateSelectedTrack(
-                playbackPositionUs,
-                bufferedDurationUs,
-                C.TIME_UNSET,
-                queue,
-                chunkIterators,
-            )
-            if (trackSelection.selectedIndex != beforeIndex) {
+            if (afterIndex != beforeIndex) {
                 lastTrackSwitchMs = nowMs
-                lastSelectedTrackIndex = trackSelection.selectedIndex
+                lastSelectedTrackIndex = afterIndex
                 android.util.Log.i(
                     "SabrChunkSource",
-                    "ABR switch: $beforeIndex -> ${trackSelection.selectedIndex} (buf=${bufferedMs}ms)"
+                    "ABR switch: $beforeIndex -> $afterIndex (buf=${bufferedMs}ms, downgrade=$isDowngrade)"
                 )
             }
+            // обычный путь — holder уже соответствует afterIndex, но если был before, нужно обновить
+            representationHolder = representationHolders[trackSelection.selectedIndex]
+            sabrClient.selectFormat(representationHolder.representation)
         }
 
         if (representationHolder.chunkIndex == null) {
@@ -327,7 +336,10 @@ class DefaultSabrChunkSource(
                     if (isInitialEdge) {
                         sabrClient.consumeServerSeekMs() // чистим stale seek 0
                         segmentNum = headSeq!!
-                        requestedTimeMs = (headTimeMs ?: 0L) - 15000 // 15с до головы — стабильно как в браузере
+                        val rawRequested = (headTimeMs ?: 0L) - 15000 // 15с до головы — стабильно как в браузере
+                        // Не улетаем за окно DVR (window 10с → head-15000 вне окна) — clamp к [minSeek, head],
+                        // иначе startTime станет 0, а плеер на defaultPos 5с → readahead -5с и ABR падает в 144p
+                        requestedTimeMs = if (minSeekMs != null && headTimeMs != null) rawRequested.coerceIn(minSeekMs, headTimeMs) else rawRequested
                         sabrClient.hasStartedLive = true
                         android.util.Log.i("SabrChunkSource", "live initial head (ignore seek): headSeq=$headSeq headTimeMs=$headTimeMs seekMs=$rawSeek -> segmentNum=$segmentNum requestedTimeMs=$requestedTimeMs")
                     } else if (serverSeekMs != null) {
@@ -401,7 +413,17 @@ class DefaultSabrChunkSource(
                 }
             }
 
-            val startTimeUs = previousChunk?.endTimeUs ?: loadPositionUs
+            // Live: start должен соответствовать window-позиции запрошенного времени (requestedTimeMs - minSeek),
+            // иначе получаем огромный readahead -11237с (load 0 vs playback head) и постоянный ABR 144p + фризы.
+            // Для initial (previousChunk==null) берём window-позицию requestedTime, для sequential — продолжаем от предыдущего.
+            val startTimeUs = if (isLive) {
+                if (previousChunk != null) previousChunk.endTimeUs
+                else {
+                    val windowStartMs = minSeekMs ?: 0L
+                    val windowPosMs = (requestedTimeMs - windowStartMs).coerceIn(0L, 120_000L) // clamp к окну/2мин max
+                    Util.msToUs(windowPosMs)
+                }
+            } else previousChunk?.endTimeUs ?: loadPositionUs
             if (!isLive && startTimeUs >= representationHolder.periodDurationUs) {
                 // The period duration clips the period to a position before the segment.
                 out.endOfStream = true
