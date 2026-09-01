@@ -257,7 +257,8 @@ class DefaultSabrChunkSource(
             // Initialization completed but the extractor has not produced an index yet.
             // Request the next media segment using server metadata (endSegmentNumber)
             // instead of a client-built ChunkIndex.
-            val segmentNum = previousChunk?.nextChunkIndex ?: 0
+            val defaultSegmentNum = previousChunk?.nextChunkIndex ?: 0
+            val segmentNum = defaultSegmentNum
             if (isLive) {
                 android.util.Log.i(
                     "SabrChunkSource",
@@ -289,7 +290,10 @@ class DefaultSabrChunkSource(
             val endTimeUs = if (representationHolder.lastSegmentDurationUs > 0) {
                 startTimeUs + representationHolder.lastSegmentDurationUs
             } else {
-                C.TIME_UNSET
+                // Media3 requires a finite end time for ContainerMediaChunk. The
+                // server-segment duration is learned from SabrDataSource after the
+                // first response, so use one second only for the initial live chunk.
+                startTimeUs + 1_000_000L
             }
             val seekTimeUs = if (queue.isEmpty()) loadPositionUs else C.TIME_UNSET
 
@@ -313,7 +317,7 @@ class DefaultSabrChunkSource(
             android.util.Log.i(
                 "SabrChunkSource",
                 "requesting segment (pre-index): live=$isLive, index=$segmentNum, " +
-                    "sabrSegment=${segmentNum + 1}, endSegmentNumber=$endSegmentNumber"
+                    "requestedSequence=${segmentNum + 1}, endSegmentNumber=$endSegmentNumber"
             )
             out.chunk = ContainerMediaChunk(
                 dataSource,

@@ -118,6 +118,7 @@ class SabrClient private constructor(
     private var videoFormat: Representation? = null
     private val initializedFormats = mutableMapOf<Int, InitializedFormat>()
     private val partialSegments = mutableMapOf<Int, Segment>()
+    private val pendingSegments = mutableMapOf<Int, MutableList<Segment>>()
     private val client: OkHttpClient = OkHttpManager.instance().getClient()
     private var requestNumber = 1
     private var playbackCookie: PlaybackCookie? = null
@@ -164,6 +165,9 @@ class SabrClient private constructor(
 
     fun getEndSegmentNumber(formatId: FormatId): Long? = initializedFormats[formatId.itag]?.endSegmentNumber
 
+    fun getFirstAvailableSegmentNumber(formatId: FormatId): Long? =
+        initializedFormats[formatId.itag]?.downloadedSegments?.keys?.minOrNull()
+
     /** Returns the server's current target readahead for the selected track type, if present. */
     fun getTargetReadaheadMs(format: Representation): Int? {
         val policy = nextRequestPolicy ?: return null
@@ -193,15 +197,18 @@ class SabrClient private constructor(
         return runBlocking {
             withContext(dispatcher) {
                 var format = initializedFormats[itag]
-                if (format == null || !format.hasSegment(playbackRequest.segment)) {
-                    format?.downloadedSegments?.clear()
-                    media(playbackRequest)
-                    initializedFormats.keys.retainAll { key ->
-                        audioFormat?.streamInfo?.itag == key || videoFormat?.streamInfo?.itag == key
+                repeat(if (liveMetadata != null) LIVE_REQUEST_RETRIES else 1) { attempt ->
+                    if (format == null || !format.hasSegment(playbackRequest.segment)) {
+                        if (attempt > 0) delay(LIVE_RETRY_DELAY_MS)
+                        media(playbackRequest)
+                        initializedFormats.keys.retainAll { key ->
+                            audioFormat?.streamInfo?.itag == key || videoFormat?.streamInfo?.itag == key
+                        }
+                        format = initializedFormats[itag]
                     }
-                    format = initializedFormats[itag]
+                    format?.getSegment(playbackRequest.segment)?.let { return@withContext it }
                 }
-                format?.getSegment(playbackRequest.segment)
+                null
             }
         }
     }
@@ -260,9 +267,16 @@ class SabrClient private constructor(
             UMPPartId.MEDIA_HEADER -> {
                 val header = MediaHeader.parseFrom(part.data)
                 if (header.videoId != videoId) throw IOException("Header mismatch")
-                if (!initializedFormats.containsKey(header.formatId.itag)) return
-                partialSegments[header.headerId] = Segment(header, header.sequenceNumber, mutableListOf(),
-                    if (header.hasDurationMs()) header.durationMs else 0)
+                val segment = Segment(
+                    header,
+                    header.sequenceNumber,
+                    mutableListOf(),
+                    if (header.hasDurationMs()) header.durationMs else 0,
+                )
+                partialSegments[header.headerId] = segment
+                Log.i(TAG, "media header: itag=${header.formatId.itag}, headerId=${header.headerId}, " +
+                    "sequence=${header.sequenceNumber}, init=${header.isInitSeg}, " +
+                    "startMs=${header.startMs}, durationMs=${segment.duration}")
             }
             UMPPartId.MEDIA -> {
                 val parser = UmpParser(part.data)
@@ -273,9 +287,14 @@ class SabrClient private constructor(
                 val parser = UmpParser(part.data)
                 val id = parser.readVarint()?.toInt() ?: return
                 val segment = partialSegments.remove(id) ?: return
-                val format = initializedFormats[segment.header.itag] ?: return
-                format.downloadedSegments[segment.sequenceNumber] = segment
-                if (segment.header.isInitSeg) format.initSegment = segment
+                val format = initializedFormats[segment.header.itag]
+                if (format == null) {
+                    pendingSegments.getOrPut(segment.header.itag) { mutableListOf() }.add(segment)
+                    Log.i(TAG, "media segment pending metadata: itag=${segment.header.itag}, " +
+                        "sequence=${segment.sequenceNumber}")
+                    return
+                }
+                storeSegment(format, segment)
             }
             UMPPartId.NEXT_REQUEST_POLICY -> {
                 val policy = NextRequestPolicy.parseFrom(part.data)
@@ -291,8 +310,13 @@ class SabrClient private constructor(
             }
             UMPPartId.FORMAT_INITIALIZATION_METADATA -> {
                 val metadata = FormatInitializationMetadata.parseFrom(part.data)
-                initializedFormats[metadata.formatId.itag] = InitializedFormat(
-                    metadata.formatId, endSegmentNumber = metadata.endSegmentNumber, duration = metadata.endTimeMs)
+                val format = InitializedFormat(
+                    metadata.formatId,
+                    endSegmentNumber = metadata.endSegmentNumber,
+                    duration = metadata.endTimeMs,
+                )
+                initializedFormats[metadata.formatId.itag] = format
+                pendingSegments.remove(metadata.formatId.itag)?.forEach { storeSegment(format, it) }
             }
             UMPPartId.LIVE_METADATA -> liveMetadata = LiveMetadata.parseFrom(part.data)
             UMPPartId.SABR_SEEK -> {
@@ -316,6 +340,13 @@ class SabrClient private constructor(
         }
     }
 
+    private fun storeSegment(format: InitializedFormat, segment: Segment) {
+        format.downloadedSegments[segment.sequenceNumber] = segment
+        if (segment.header.isInitSeg) format.initSegment = segment
+        Log.i(TAG, "media segment stored: itag=${segment.header.itag}, " +
+            "sequence=${segment.sequenceNumber}, init=${segment.header.isInitSeg}, bytes=${segment.length()}")
+    }
+
     fun generatePoToken(): ByteString? =
         poTokenProvider?.getStreamingPoToken(videoId)?.let { ByteString.copyFrom(it) }
 
@@ -326,5 +357,7 @@ class SabrClient private constructor(
         private const val ACCEPT = "application/vnd.yt-ump"
         private const val USER_AGENT = "com.google.visionos.youtube/1.02(RealityDevice14,1; U; CPU visionOS 25_6_0 like Mac OS X; GB)"
         private const val YOUTUBE_FRONTEND_URL = "https://www.youtube.com"
+        private const val LIVE_REQUEST_RETRIES = 3
+        private const val LIVE_RETRY_DELAY_MS = 250L
     }
 }
