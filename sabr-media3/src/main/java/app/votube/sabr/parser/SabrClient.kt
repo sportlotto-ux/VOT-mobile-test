@@ -152,6 +152,28 @@ class SabrClient private constructor(
 
     fun getEndSegmentNumber(formatId: FormatId): Long? = initializedFormats[formatId.itag]?.endSegmentNumber
 
+    /** Returns the server's current target readahead for the selected track type, if present. */
+    fun getTargetReadaheadMs(format: Representation): Int? {
+        val policy = nextRequestPolicy ?: return null
+        val value = if (MimeTypes.isAudio(format.format.containerMimeType)) {
+            if (policy.hasTargetAudioReadaheadMs()) policy.targetAudioReadaheadMs else null
+        } else {
+            if (policy.hasTargetVideoReadaheadMs()) policy.targetVideoReadaheadMs else null
+        }
+        return value?.takeIf { it >= 0 }
+    }
+
+    /** Returns the server's current minimum readahead for the selected track type, if present. */
+    fun getMinReadaheadMs(format: Representation): Int? {
+        val policy = nextRequestPolicy ?: return null
+        val value = if (MimeTypes.isAudio(format.format.containerMimeType)) {
+            if (policy.hasMinAudioReadaheadMs()) policy.minAudioReadaheadMs else null
+        } else {
+            if (policy.hasMinVideoReadaheadMs()) policy.minVideoReadaheadMs else null
+        }
+        return value?.takeIf { it >= 0 }
+    }
+
     fun getNextSegment(playbackRequest: PlaybackRequest): Segment? {
         fatalError?.let { throw IOException("SABR error: ${it.type}") }
         val itag = playbackRequest.format.itag

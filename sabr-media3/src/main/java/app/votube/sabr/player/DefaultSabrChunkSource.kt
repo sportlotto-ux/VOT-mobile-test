@@ -178,6 +178,7 @@ class DefaultSabrChunkSource(
         )
         val playbackPositionUs = loadingInfo.playbackPositionUs
         val bufferedDurationUs = loadPositionUs - playbackPositionUs
+        logReadaheadPolicy(bufferedDurationUs)
 
         val previousChunk = queue.lastOrNull()
 
@@ -384,6 +385,21 @@ class DefaultSabrChunkSource(
             representationHolder.chunkExtractor
                 ?: throw IllegalStateException("SABR chunk extractor is unavailable")
         )
+    }
+
+    private fun logReadaheadPolicy(bufferedDurationUs: Long) {
+        val targetMs = sabrClient.getTargetReadaheadMs(
+            representationHolders[trackSelection.selectedIndex].representation
+        )
+        val minMs = sabrClient.getMinReadaheadMs(
+            representationHolders[trackSelection.selectedIndex].representation
+        )
+        if (targetMs != null || minMs != null) {
+            android.util.Log.i(
+                "SabrChunkSource",
+                "readahead: currentMs=${Util.usToMs(bufferedDurationUs)}, minMs=$minMs, targetMs=$targetMs"
+            )
+        }
     }
 
     override fun onChunkLoadCompleted(chunk: Chunk) {
