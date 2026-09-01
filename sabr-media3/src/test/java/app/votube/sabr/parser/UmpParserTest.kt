@@ -4,6 +4,7 @@ import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
+import video_streaming.NextRequestPolicyOuterClass.NextRequestPolicy
 import video_streaming.PlaybackStartPolicyOuterClass.PlaybackStartPolicy
 import video_streaming.UmpPartId.UMPPartId
 
@@ -40,6 +41,30 @@ class UmpParserTest {
         assertEquals(1500, decoded.startMinReadaheadPolicy.minReadaheadMs)
         assertEquals(128000, decoded.startMinReadaheadPolicy.minBandwidthBytesPerSec)
         assertEquals(500, decoded.resumeMinReadaheadPolicy.minReadaheadMs)
+    }
+
+    @Test
+    fun `readPart preserves next request policy payload`() {
+        val policy = NextRequestPolicy.newBuilder()
+            .setTargetAudioReadaheadMs(3000)
+            .setTargetVideoReadaheadMs(6000)
+            .setMinAudioReadaheadMs(1000)
+            .setMinVideoReadaheadMs(2000)
+            .setMaxTimeSinceLastRequestMs(8000)
+            .setBackoffTimeMs(250)
+            .setVideoId("video-id")
+            .build()
+        val part = UmpParser(encodePart(UMPPartId.NEXT_REQUEST_POLICY, policy.toByteArray())).readPart()
+        val decoded = NextRequestPolicy.parseFrom(part?.data)
+
+        assertEquals(UMPPartId.NEXT_REQUEST_POLICY, part?.type)
+        assertEquals(3000, decoded.targetAudioReadaheadMs)
+        assertEquals(6000, decoded.targetVideoReadaheadMs)
+        assertEquals(1000, decoded.minAudioReadaheadMs)
+        assertEquals(2000, decoded.minVideoReadaheadMs)
+        assertEquals(8000, decoded.maxTimeSinceLastRequestMs)
+        assertEquals(250, decoded.backoffTimeMs)
+        assertEquals("video-id", decoded.videoId)
     }
 
     @Test

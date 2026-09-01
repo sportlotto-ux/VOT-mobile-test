@@ -122,6 +122,9 @@ class SabrClient private constructor(
     private var requestNumber = 1
     private var playbackCookie: PlaybackCookie? = null
     private var backoffTime: Int? = null
+    /** Latest server-provided readahead targets for the next SABR request. */
+    var nextRequestPolicy: NextRequestPolicy? = null
+        private set
     private val sabrContexts = mutableMapOf<Int, SabrContext>()
     private val activeSabrContexts = mutableSetOf<Int>()
     var lastSeekMs: Long? = null
@@ -242,8 +245,9 @@ class SabrClient private constructor(
             }
             UMPPartId.NEXT_REQUEST_POLICY -> {
                 val policy = NextRequestPolicy.parseFrom(part.data)
-                backoffTime = policy.backoffTimeMs
-                playbackCookie = policy.playbackCookie
+                nextRequestPolicy = policy
+                backoffTime = if (policy.hasBackoffTimeMs()) policy.backoffTimeMs else null
+                playbackCookie = if (policy.hasPlaybackCookie()) policy.playbackCookie else null
             }
             UMPPartId.PLAYBACK_START_POLICY -> {
                 // This policy is advisory: it tells the client how much data should be
