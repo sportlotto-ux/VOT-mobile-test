@@ -367,9 +367,16 @@ class DefaultSabrChunkSource(
                     // sequential live: segmentNum уже из lastReturned (точный номер от сервера) или nextChunkIndex,
                     // поэтому абсолютное requestedTimeMs считаем от головы, а не от DVR offset (prevEnd 0..window),
                     // иначе для head 12360/24719с получаем 1000 вместо 24704xxx и вечный fallback.
+                    // Не улетаем за голову — сервер ещё не сгенерил head+1, clamp к head.
+                    if (headSeq != null && segmentNum > headSeq) {
+                        android.util.Log.w("SabrChunkSource", "live sequential clamp: segmentNum $segmentNum > headSeq $headSeq -> $headSeq")
+                        segmentNum = headSeq
+                    }
                     val estDurationMs = if (representationHolder.lastSegmentDurationUs > 0) representationHolder.lastSegmentDurationUs / 1000 else 5000L
                     if (headSeq != null && headTimeMs != null) {
                         requestedTimeMs = headTimeMs - (headSeq - segmentNum) * estDurationMs
+                        // clamp requested к голове, если из-за дрейфа ушли в будущее
+                        if (requestedTimeMs > headTimeMs) requestedTimeMs = headTimeMs
                     } else {
                         val minSeekForSeq = minSeekMs ?: 0L
                         requestedTimeMs = minSeekForSeq + Util.usToMs(previousChunk.endTimeUs)

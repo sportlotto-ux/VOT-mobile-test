@@ -316,7 +316,12 @@ class SabrClient private constructor(
         }
         if (result == null) {
             val f = initializedFormats[itag]
-            Log.e(TAG, "no segment ${playbackRequest.segment} for itag=$itag, available=${f?.downloadedSegments?.keys?.sorted()}, endSegment=${f?.endSegmentNumber}, liveHead=${liveMetadata?.headSequenceNumber}, pending=${pendingSegments[itag]?.size}, partialIds=${partialSegments.keys}")
+            // Для live с пустым кэшем не спамим E — это transient (голова ещё не догнала, или трек только что инициализирован)
+            if (liveMetadata != null && f?.downloadedSegments?.isEmpty() == true) {
+                Log.w(TAG, "live no segment yet ${playbackRequest.segment} for itag=$itag, head=${liveMetadata?.headSequenceNumber}, pending=${pendingSegments[itag]?.size} — will retry at head")
+            } else {
+                Log.e(TAG, "no segment ${playbackRequest.segment} for itag=$itag, available=${f?.downloadedSegments?.keys?.sorted()}, endSegment=${f?.endSegmentNumber}, liveHead=${liveMetadata?.headSequenceNumber}, pending=${pendingSegments[itag]?.size}, partialIds=${partialSegments.keys}")
+            }
         }
         return result
     }
