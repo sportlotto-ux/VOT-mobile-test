@@ -360,6 +360,12 @@ class DefaultSabrChunkSource(
                         android.util.Log.i("SabrChunkSource", "live head fallback: headSeq=$headSeq -> segmentNum=$segmentNum")
                     }
                     }
+                } else {
+                    // sequential live: previousChunk.endTimeUs — это DVR offset (0..window), для сервера нужен абсолютный headTime
+                    val minSeekForSeq = minSeekMs ?: 0L
+                    requestedTimeMs = minSeekForSeq + Util.usToMs(previousChunk.endTimeUs)
+                    // segmentNum уже выставлен через lastReturned/nextChunkIndex, но подчищаем лог
+                    android.util.Log.i("SabrChunkSource", "live sequential: prevEndMs=${Util.usToMs(previousChunk.endTimeUs)} minSeek=$minSeekForSeq -> requestedTimeMs=$requestedTimeMs segmentNum=$segmentNum")
                 }
                 android.util.Log.i(
                     "SabrChunkSource",
