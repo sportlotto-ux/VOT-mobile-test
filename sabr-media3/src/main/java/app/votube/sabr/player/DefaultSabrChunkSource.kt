@@ -354,26 +354,36 @@ class DefaultSabrChunkSource(
                         }
                         android.util.Log.i("SabrChunkSource", "live serverSeek (initial/seek): seekMs=$serverSeekMs headSeq=$headSeq headTimeMs=$headTimeMs -> segmentNum=$segmentNum requestedTimeMs=$requestedTimeMs")
                     } else {
-                        sabrClient.consumeServerSeekMs() // чистим мусорный seek 0, идём по реальной позиции
-                        // DVR: уже не initial edge и нет seek — считаем по окну (loadPosition 0 => начало, windowDuration => голова)
-                        if (headSeq != null && headTimeMs != null && minSeekMs != null) {
-                        val windowDurationMs = sabrClient.getLiveWindowDurationMs() ?: (headTimeMs - minSeekMs)
-                        // DVR: loadPosition 0 => minSeek (начало), loadPosition windowDuration => head (край)
-                        val absoluteTimeMs = minSeekMs + targetMs
-                        // Проверяем что абсолютное время внутри окна
-                        val clampedAbsolute = absoluteTimeMs.coerceIn(minSeekMs, headTimeMs)
-                        requestedTimeMs = clampedAbsolute
-                        val estDurationMs = if (representationHolder.lastSegmentDurationUs > 0) representationHolder.lastSegmentDurationUs / 1000 else 5000L
-                        val offsetFromHeadMs = headTimeMs - clampedAbsolute
-                        val segmentsAgo = if (offsetFromHeadMs > 0) offsetFromHeadMs / estDurationMs else 0L
-                        segmentNum = maxOf(0L, headSeq - segmentsAgo)
-                        android.util.Log.i("SabrChunkSource", "live DVR mapping: targetMs=$targetMs minSeek=$minSeekMs absolute=$clampedAbsolute headSeq=$headSeq -> segmentNum=$segmentNum")
-                    } else if (headSeq != null && headSeq > 100 && segmentNum < 10) {
-                        // Fallback: если голова далеко, а просим 0/1 — берём голову
-                        segmentNum = headSeq
-                        requestedTimeMs = headTimeMs ?: requestedTimeMs
-                        android.util.Log.i("SabrChunkSource", "live head fallback: headSeq=$headSeq -> segmentNum=$segmentNum")
-                    }
+                        // A/V sync для initial (пустая очередь второго трека): если другой трек уже у головы, прыгаем к нему,
+                        // иначе DVR mapping уведет на 300с (windowPos clamp) и будет readahead -27000.
+                        val maxLastInit = sabrClient.getMaxLastReturnedSequence()
+                        val estInit = if (representationHolder.lastSegmentDurationUs > 0) representationHolder.lastSegmentDurationUs / 1000 else 5000L
+                        if (maxLastInit != null && headSeq != null && headTimeMs != null && maxLastInit > 100 && maxLastInit <= headSeq && maxLastInit > segmentNum + 2) {
+                            segmentNum = maxLastInit
+                            requestedTimeMs = headTimeMs - (headSeq - segmentNum) * estInit
+                            if (requestedTimeMs > headTimeMs) requestedTimeMs = headTimeMs
+                            android.util.Log.w("SabrChunkSource", "live A/V sync initial: itag=${representationHolder.representation.streamInfo.itag} jump from DVR to maxLast $maxLastInit -> segment $segmentNum requested $requestedTimeMs")
+                        } else {
+                            sabrClient.consumeServerSeekMs() // чистим мусорный seek 0, идём по реальной позиции
+                            // DVR: уже не initial edge и нет seek — считаем по окну (loadPosition 0 => начало, windowDuration => голова)
+                            if (headSeq != null && headTimeMs != null && minSeekMs != null) {
+                            // DVR: loadPosition 0 => minSeek (начало), loadPosition windowDuration => head (край)
+                            val absoluteTimeMs = minSeekMs + targetMs
+                            // Проверяем что абсолютное время внутри окна
+                            val clampedAbsolute = absoluteTimeMs.coerceIn(minSeekMs, headTimeMs)
+                            requestedTimeMs = clampedAbsolute
+                            val estDurationMs = if (representationHolder.lastSegmentDurationUs > 0) representationHolder.lastSegmentDurationUs / 1000 else 5000L
+                            val offsetFromHeadMs = headTimeMs - clampedAbsolute
+                            val segmentsAgo = if (offsetFromHeadMs > 0) offsetFromHeadMs / estDurationMs else 0L
+                            segmentNum = maxOf(0L, headSeq - segmentsAgo)
+                            android.util.Log.i("SabrChunkSource", "live DVR mapping: targetMs=$targetMs minSeek=$minSeekMs absolute=$clampedAbsolute headSeq=$headSeq -> segmentNum=$segmentNum")
+                            } else if (headSeq != null && headSeq > 100 && segmentNum < 10) {
+                                // Fallback: если голова далеко, а просим 0/1 — берём голову
+                                segmentNum = headSeq
+                                requestedTimeMs = headTimeMs ?: requestedTimeMs
+                                android.util.Log.i("SabrChunkSource", "live head fallback: headSeq=$headSeq -> segmentNum=$segmentNum")
+                            }
+                        }
                     }
                 } else {
                     // sequential live: segmentNum уже из lastReturned (точный номер от сервера) или nextChunkIndex,
@@ -388,10 +398,12 @@ class DefaultSabrChunkSource(
                     // поэтому могут разъехаться на 5-10с (видео 2247470, аудио 2247468). Тогда видео фризит,
                     // аудио доигрывает старый кусок и повторяется. Для live подтягиваем отставший трек к голове:
                     // если max(lastReturned) сильно впереди (>1 сегмент), берём max как базу.
+                    var jumpedForSync = false
                     val maxLast = sabrClient.getMaxLastReturnedSequence()
                     if (headSeq != null && maxLast != null && maxLast > segmentNum + 1) {
                         android.util.Log.w("SabrChunkSource", "live A/V sync: itag=${representationHolder.representation.streamInfo.itag} segment $segmentNum lags max $maxLast -> jump to ${maxLast}")
                         segmentNum = maxLast
+                        jumpedForSync = true
                     }
                     val estDurationMs = if (representationHolder.lastSegmentDurationUs > 0) representationHolder.lastSegmentDurationUs / 1000 else 5000L
                     if (headSeq != null && headTimeMs != null) {
@@ -402,11 +414,11 @@ class DefaultSabrChunkSource(
                         val minSeekForSeq = minSeekMs ?: 0L
                         requestedTimeMs = minSeekForSeq + Util.usToMs(previousChunk.endTimeUs)
                     }
-                    android.util.Log.i("SabrChunkSource", "live sequential: segmentNum=$segmentNum headSeq=$headSeq headTimeMs=$headTimeMs -> requestedTimeMs=$requestedTimeMs itag=${representationHolder.representation.streamInfo.itag}")
+                    android.util.Log.i("SabrChunkSource", "live sequential: segmentNum=$segmentNum headSeq=$headSeq headTimeMs=$headTimeMs -> requestedTimeMs=$requestedTimeMs itag=${representationHolder.representation.streamInfo.itag} jumped=$jumpedForSync")
                 }
                 android.util.Log.i(
                     "SabrChunkSource",
-                    "live segment request: index=$segmentNum, loadPositionMs=${Util.usToMs(loadPositionUs)}, requestedTimeMs=$requestedTimeMs, headSeq=$headSeq, headTimeMs=$headTimeMs, minSeekMs=$minSeekMs, downloaded=$downloaded"
+                    "live segment request: itag=${representationHolder.representation.streamInfo.itag} index=$segmentNum, loadPositionMs=${Util.usToMs(loadPositionUs)}, requestedTimeMs=$requestedTimeMs, headSeq=$headSeq, headTimeMs=$headTimeMs, minSeekMs=$minSeekMs, downloaded=$downloaded"
                 )
             }
             val endSegmentNumber = sabrClient.getEndSegmentNumber(
@@ -425,11 +437,20 @@ class DefaultSabrChunkSource(
             // Live: start должен соответствовать window-позиции запрошенного времени для initial,
             // иначе readahead -11237с. Для sequential берём previousChunk.endTimeUs чтобы очередь была континуальна,
             // иначе аудио и видео разъедутся по startTime (gap) и loadPosition застрянет.
+            // jumpedForSync — если A/V отстал, нужно прыгнуть к голове, иначе loadPosition останется в прошлом.
+            val jumpedForSyncLocal = if (isLive && previousChunk != null) {
+                val ml = sabrClient.getMaxLastReturnedSequence()
+                val seqForCheck = previousChunk.nextChunkIndex
+                // повторная проверка для startTime: если предыдущий чанк отстал — прыжок
+                ml != null && ml > seqForCheck + 1
+            } else false
             val startTimeUs = if (isLive) {
-                if (previousChunk != null) previousChunk.endTimeUs
+                if (previousChunk != null && !jumpedForSyncLocal) previousChunk.endTimeUs
                 else {
                     val windowStartMs = sabrClient.getMinSeekableTimeMs() ?: 0L
-                    val windowPosMs = (requestedTimeMs - windowStartMs).coerceIn(0L, 300_000L)
+                    val windowDurationMs = sabrClient.getLiveWindowDurationMs()
+                    val rawWindowPosMs = requestedTimeMs - windowStartMs
+                    val windowPosMs = if (windowDurationMs != null && windowDurationMs > 0) rawWindowPosMs.coerceIn(0L, windowDurationMs) else rawWindowPosMs.coerceAtLeast(0L)
                     Util.msToUs(windowPosMs)
                 }
             } else previousChunk?.endTimeUs ?: loadPositionUs
