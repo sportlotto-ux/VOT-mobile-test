@@ -178,6 +178,8 @@ class SabrClient private constructor(
     fun getLiveHeadSequenceNumber(): Long? = liveMetadata?.headSequenceNumber
     fun getLiveHeadTimeMs(): Long? = liveMetadata?.headTimeMs
     fun isLive(): Boolean = liveMetadata != null
+    fun hasFormatInitialized(itag: Int): Boolean = initializedFormats.containsKey(itag)
+
     fun getDownloadedSegmentsDebug(itag: Int): String =
         initializedFormats[itag]?.downloadedSegments?.keys?.sorted()?.toString() ?: "no format"
 

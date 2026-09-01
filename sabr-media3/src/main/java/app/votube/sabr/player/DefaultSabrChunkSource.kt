@@ -250,8 +250,16 @@ class DefaultSabrChunkSource(
             }
 
             if (!representationHolder.initializationRequested) {
-                // Initialization is still loading; there is nothing to request yet.
-                return
+                // SABR мультиплексирует: один media-ответ может принести FormatInitializationMetadata
+                // для обоих треков (аудио+видео). Если новый itag уже инициализирован сервером
+                // (пришёл с другим треком), не ждём InitializationChunk — он никогда не придёт,
+                // т.к. queue не пуста (старые чанки предыдущего itag). Считаем инициализацию done.
+                if (sabrClient.hasFormatInitialized(representationHolder.representation.streamInfo.itag)) {
+                    representationHolder.initializationRequested = true
+                } else {
+                    // Initialization is still loading; there is nothing to request yet.
+                    return
+                }
             }
 
             // Initialization completed but the extractor has not produced an index yet.
