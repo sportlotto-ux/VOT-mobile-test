@@ -68,8 +68,7 @@ class SabrMediaSource(
             Assertions.checkNotNull<LocalConfiguration>(mediaItem.localConfiguration)
             val cmcdConfiguration = cmcdConfigurationFactory?.createCmcdConfiguration(mediaItem)
             val sabrClient = SabrClient(context, manifest, poTokenProvider)
-
-            return SabrMediaSource(
+            val source = SabrMediaSource(
                 mediaItem,
                 manifest,
                 sabrClient,
@@ -79,6 +78,10 @@ class SabrMediaSource(
                 drmSessionManagerProvider.get(mediaItem),
                 loadErrorHandlingPolicy
             )
+            // Слушаем голову эфира: как только сервер скажет где голова и окно DVR — обновляем таймлайн
+            // чтобы плеер мог стартовать с live edge и перематывать назад к началу
+            sabrClient.liveMetadataListener = { meta -> source.onLiveMetadata(meta) }
+            return source
         }
 
         override fun getSupportedTypes(): IntArray = intArrayOf(C.CONTENT_TYPE_OTHER)
@@ -87,6 +90,9 @@ class SabrMediaSource(
     private var mediaTransferListener: TransferListener? = null
 
     private var elapsedRealtimeOffsetMs: Long = C.TIME_UNSET
+    // Live DVR: окно от minSeek до headTime, чтобы можно было вернуться к началу
+    private var liveWindowDurationUs: Long = C.TIME_UNSET
+    private var liveDefaultPositionUs: Long = 0L
 
     @Synchronized
     override fun getMediaItem(): MediaItem {
@@ -163,18 +169,42 @@ class SabrMediaSource(
             "Preparing SABR source: videoId=${manifest.videoId}, " +
                 "adaptationSets=${manifest.adaptationSets.size}, durationMs=${manifest.durationMs}"
         )
+        // Для live durationMs == TIME_UNSET — делаем окно динамическим, потом обновим по LiveMetadata
+        val isLive = manifest.durationMs == C.TIME_UNSET
+        val windowDuration = if (isLive && liveWindowDurationUs != C.TIME_UNSET) liveWindowDurationUs else Util.msToUs(manifest.durationMs)
+        val defaultPos = if (isLive && liveDefaultPositionUs != 0L) liveDefaultPositionUs else 0L
         val timeline =
             SabrTimeline(
                 C.TIME_UNSET,
                 C.TIME_UNSET,
                 elapsedRealtimeOffsetMs,
                 0,
-                Util.msToUs(manifest.durationMs),
-                0,
+                windowDuration,
+                defaultPos,
                 manifest,
                 mediaItem,
             )
         refreshSourceInfo(timeline)
+    }
+
+    internal fun onLiveMetadata(meta: video_streaming.LiveMetadataOuterClass.LiveMetadata) {
+        // Вычисляем DVR окно: от minSeek до headTime, чтобы можно было вернуться к началу стрима
+        val headTimeMs = if (meta.hasHeadTimeMs()) meta.headTimeMs else 0L
+        val minSeekMs = if (meta.hasMinSeekableTimeTicks() && meta.hasMinSeekableTimescale() && meta.minSeekableTimescale != 0)
+            meta.minSeekableTimeTicks * 1000L / meta.minSeekableTimescale else 0L
+        val windowMs = if (headTimeMs > minSeekMs) headTimeMs - minSeekMs else 0L
+        if (windowMs <= 0) return
+        val windowUs = Util.msToUs(windowMs)
+        // Дефолт — 5 сек до головы (live edge), но не меньше 5 сек от начала
+        val defaultPosUs = (windowUs - Util.msToUs(5000)).coerceAtLeast(Util.msToUs(5000).coerceAtMost(windowUs / 2))
+        // Обновляем только если окно выросло (голова движется)
+        if (windowUs != liveWindowDurationUs) {
+            liveWindowDurationUs = windowUs
+            liveDefaultPositionUs = defaultPosUs
+            android.util.Log.i("SabrMediaSource", "live timeline update: headTimeMs=$headTimeMs minSeekMs=$minSeekMs windowMs=$windowMs defaultPosMs=${Util.usToMs(defaultPosUs)}")
+            // refreshSourceInfo можно звать с любого потока — BaseMediaSource сам выставит на нужный handler
+            processManifest()
+        }
     }
 
     private class SabrTimeline(

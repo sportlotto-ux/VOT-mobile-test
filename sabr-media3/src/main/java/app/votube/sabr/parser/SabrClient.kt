@@ -131,6 +131,10 @@ class SabrClient private constructor(
     var lastSeekMs: Long? = null
     private var liveMetadata: LiveMetadata? = null
     var serverSeekTimeMs: Long? = null; private set
+    /** listener для головы эфира — чтобы плеер мог обновить таймлайн и позволить перемотку назад */
+    var liveMetadataListener: ((LiveMetadata) -> Unit)? = null
+    /** флаг что live уже стартовал с головы — нужен чтобы отличить начальный edge от DVR rewind к началу */
+    var hasStartedLive: Boolean = false
     private var lastRequestMs: Long? = null
     var lastManualFormatSelectionMs: Long? = null
     var lastActionMs: Long? = null
@@ -173,6 +177,26 @@ class SabrClient private constructor(
     fun isLive(): Boolean = liveMetadata != null
     fun getDownloadedSegmentsDebug(itag: Int): String =
         initializedFormats[itag]?.downloadedSegments?.keys?.sorted()?.toString() ?: "no format"
+
+    fun getMinSeekableTimeMs(): Long? = liveMetadata?.let {
+        if (it.hasMinSeekableTimeTicks() && it.hasMinSeekableTimescale() && it.minSeekableTimescale != 0)
+            it.minSeekableTimeTicks * 1000L / it.minSeekableTimescale else null
+    }
+    fun getMaxSeekableTimeMs(): Long? = liveMetadata?.let {
+        if (it.hasMaxSeekableTimeTicks() && it.hasMaxSeekableTimescale() && it.maxSeekableTimescale != 0)
+            it.maxSeekableTimeTicks * 1000L / it.maxSeekableTimescale else null
+    }
+    /** consume SABR_SEEK once so caller can apply it and we don't reuse stale value */
+    fun consumeServerSeekMs(): Long? {
+        val v = serverSeekTimeMs
+        serverSeekTimeMs = null
+        return v
+    }
+    fun getLiveWindowDurationMs(): Long? {
+        val head = getLiveHeadTimeMs() ?: return null
+        val min = getMinSeekableTimeMs() ?: 0L
+        return (head - min).takeIf { it > 0 }
+    }
 
     /** Returns the server's current target readahead for the selected track type, if present. */
     fun getTargetReadaheadMs(format: Representation): Int? {
@@ -220,18 +244,62 @@ class SabrClient private constructor(
                         if (segment != null) return@withContext segment
                     }
                 }
-                // Live fallback: if exact segment not found but any segment available, use earliest
+                // Live: слушать голову эфира и проверять отрезок пройденного времени для DVR
                 if (liveMetadata != null) {
                     val fallbackFormat = initializedFormats[itag]
                     if (fallbackFormat != null && fallbackFormat.downloadedSegments.isNotEmpty()) {
                         val avail = fallbackFormat.downloadedSegments.keys.sorted()
-                        Log.w(TAG, "live fallback: requested ${playbackRequest.segment} not found, available=$avail")
-                        // Try to return the smallest available live segment instead of failing
-                        val minSeg = avail.first()
-                        val seg = fallbackFormat.getSegment(minSeg)
-                        if (seg != null) {
-                            Log.i(TAG, "live fallback: returning segment $minSeg instead of ${playbackRequest.segment}")
-                            return@withContext seg
+                        val headSeq = liveMetadata?.headSequenceNumber
+                        val headTime = liveMetadata?.headTimeMs
+                        val serverSeek = serverSeekTimeMs // не consume здесь, пусть ChunkSource решает
+                        Log.w(TAG, "live fallback: requested ${playbackRequest.segment} not found, available=$avail, headSeq=$headSeq, headTimeMs=$headTime, serverSeekMs=$serverSeek, requestedTimeMs=${playbackRequest.segmentStartTimeMs}")
+                        // 1) Если сервер прислал SABR_SEEK — берём сегмент ближайший к serverSeek
+                        if (serverSeek != null) {
+                            val bySeek = fallbackFormat.downloadedSegments.values.minByOrNull { kotlin.math.abs(it.header.startMs - serverSeek) }
+                            if (bySeek != null) {
+                                val seg = fallbackFormat.getSegment(bySeek.sequenceNumber)
+                                if (seg != null) {
+                                    Log.i(TAG, "live fallback by serverSeek: returning seq ${bySeek.sequenceNumber} startMs=${bySeek.header.startMs} for seek $serverSeek instead of ${playbackRequest.segment}")
+                                    serverSeekTimeMs = null
+                                    return@withContext seg
+                                }
+                            }
+                        }
+                        // 2) Если запросили начало (1/2), а голова 6087 — стартуем с головы (live edge)
+                        if (headSeq != null && playbackRequest.segment <= 10 && headSeq > 100) {
+                            val headSeg = fallbackFormat.downloadedSegments[headSeq]
+                                ?: fallbackFormat.downloadedSegments[headSeq - 1]
+                                ?: fallbackFormat.downloadedSegments.values.maxByOrNull { it.sequenceNumber }
+                            if (headSeg != null) {
+                                val seg = fallbackFormat.getSegment(headSeg.sequenceNumber)
+                                if (seg != null) {
+                                    Log.i(TAG, "live head fallback: requested ${playbackRequest.segment} far from head $headSeq, returning head seq ${headSeg.sequenceNumber} startMs=${headSeg.header.startMs}")
+                                    hasStartedLive = true
+                                    return@withContext seg
+                                }
+                            }
+                        }
+                        // 3) DVR rewind: ищем сегмент по пройденному времени (elapsed), чтобы можно было вернуться к началу
+                        val byTime = fallbackFormat.downloadedSegments.values.minByOrNull { kotlin.math.abs(it.header.startMs - playbackRequest.segmentStartTimeMs) }
+                        // берём только если близко по времени (< 10 сек) чтобы не отдавать рандом
+                        if (byTime != null && kotlin.math.abs(byTime.header.startMs - playbackRequest.segmentStartTimeMs) < 10_000) {
+                            val seg = fallbackFormat.getSegment(byTime.sequenceNumber)
+                            if (seg != null) {
+                                Log.i(TAG, "live time fallback: returning seq ${byTime.sequenceNumber} startMs=${byTime.header.startMs} ~ requestedTime ${playbackRequest.segmentStartTimeMs}")
+                                return@withContext seg
+                            }
+                        }
+                        // 4) последний шанс — ближайший к голове для live edge
+                        if (headSeq != null) {
+                            val nearestHead = avail.minByOrNull { kotlin.math.abs(it - headSeq) }
+                            if (nearestHead != null) {
+                                val seg = fallbackFormat.getSegment(nearestHead)
+                                if (seg != null) {
+                                    Log.i(TAG, "live nearest head fallback: returning $nearestHead for head $headSeq")
+                                    hasStartedLive = true
+                                    return@withContext seg
+                                }
+                            }
                         }
                     }
                 }
@@ -356,7 +424,8 @@ class SabrClient private constructor(
             }
             UMPPartId.LIVE_METADATA -> {
                 liveMetadata = LiveMetadata.parseFrom(part.data)
-                Log.i(TAG, "live metadata: headSeq=${liveMetadata?.headSequenceNumber}, headTimeMs=${liveMetadata?.headTimeMs}, broadcastId=${liveMetadata?.broadcastId}")
+                Log.i(TAG, "live metadata: headSeq=${liveMetadata?.headSequenceNumber}, headTimeMs=${liveMetadata?.headTimeMs}, broadcastId=${liveMetadata?.broadcastId}, minSeekTicks=${if (liveMetadata!!.hasMinSeekableTimeTicks()) liveMetadata!!.minSeekableTimeTicks else "null"}")
+                liveMetadata?.let { liveMetadataListener?.invoke(it) }
             }
             UMPPartId.SABR_SEEK -> {
                 val seek = SabrSeek.parseFrom(part.data)

@@ -204,14 +204,7 @@ public class ExoMediaSourceFactory {
         }
 
         long durationMs = getDurationMs(formatInfo);
-        // SABR live is not yet stable (SABR_SEEK/headSeq alignment required): use DASH for live/post-live DVR.
-        // VOD (duration known) stays on SABR.
-        if (durationMs == C.TIME_UNSET) {
-            Log.i(TAG, "buildSabrMediaSource: live detected (durationMs=TIME_UNSET), falling back to DASH until SABR live is ready");
-            return buildDashMediaSource(formatInfo);
-        }
-
-        Log.i(TAG, "buildSabrMediaSource: building SABR source, formats=%s", adaptiveFormatCount);
+        Log.i(TAG, "buildSabrMediaSource: building SABR source, formats=%s, durationMs=%s (live=%s)", adaptiveFormatCount, durationMs, durationMs == C.TIME_UNSET);
         SabrManifest manifest = new SabrManifest(
                 formatInfo.getVideoId(),
                 formatInfo.getServerAbrStreamingUrl(),
