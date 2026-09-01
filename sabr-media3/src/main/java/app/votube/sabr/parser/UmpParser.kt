@@ -35,15 +35,11 @@ class UmpParser(private var buf: ByteArray) {
         // [0...4] bits corresponds to a size of 1...5 bytes
         val varintSize = minOf(prefix.inv().countLeadingZeroBits(), 4) + 1
 
-        var shift = 0
-        var result = 0u
-
-        if (varintSize != 5) {
-            shift = 8 - varintSize
-            // compute mask of prefix
-            val mask = (1u shl shift) - 1u
-            result = result or (prefix.toUInt() and mask)
-        }
+        // The first byte always carries (8 - varintSize) payload bits, including the
+        // 5-byte form (3 payload bits + 4 continuation bytes), per the UMP spec
+        // (https://github.com/gsuberland/UMP_Format).
+        var shift = 8 - varintSize
+        var result = prefix.toUInt() and ((1u shl shift) - 1u)
 
         for (i in 1 until varintSize) {
             val byte = readByte()?.toUInt() ?: return null

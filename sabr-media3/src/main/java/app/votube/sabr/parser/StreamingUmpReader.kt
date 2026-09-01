@@ -32,12 +32,11 @@ class StreamingUmpReader(
     private fun readVarint(): UInt? {
         val first = readByte() ?: return null
         val varintSize = minOf(first.toUByte().inv().countLeadingZeroBits(), 4) + 1
-        var shift = 0
-        var result = 0u
-        if (varintSize != 5) {
-            shift = 8 - varintSize
-            result = first.toUInt() and ((1u shl shift) - 1u)
-        }
+        // The first byte always carries (8 - varintSize) payload bits, including the
+        // 5-byte form (3 payload bits + 4 continuation bytes), per the UMP spec
+        // (https://github.com/gsuberland/UMP_Format).
+        var shift = 8 - varintSize
+        var result = first.toUInt() and ((1u shl shift) - 1u)
         repeat(varintSize - 1) {
             result = result or (readByteOrThrow().toUInt() shl shift)
             shift += 8
