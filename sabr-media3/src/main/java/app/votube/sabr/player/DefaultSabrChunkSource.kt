@@ -258,6 +258,12 @@ class DefaultSabrChunkSource(
             // Request the next media segment using server metadata (endSegmentNumber)
             // instead of a client-built ChunkIndex.
             val segmentNum = previousChunk?.nextChunkIndex ?: 0
+            if (isLive) {
+                android.util.Log.i(
+                    "SabrChunkSource",
+                    "live segment request: index=$segmentNum, loadPositionMs=${Util.usToMs(loadPositionUs)}"
+                )
+            }
             val endSegmentNumber = sabrClient.getEndSegmentNumber(
                 representationHolder.representation.formatId()
             )
@@ -272,12 +278,19 @@ class DefaultSabrChunkSource(
             }
 
             val startTimeUs = previousChunk?.endTimeUs ?: loadPositionUs
-            if (startTimeUs >= representationHolder.periodDurationUs) {
+            if (!isLive && startTimeUs >= representationHolder.periodDurationUs) {
                 // The period duration clips the period to a position before the segment.
                 out.endOfStream = true
                 return
             }
-            val endTimeUs = startTimeUs + representationHolder.lastSegmentDurationUs
+            // For live streams the manifest duration is TIME_UNSET. A zero duration is
+            // still valid for the first request; media3 will use the next request to
+            // advance the live queue.
+            val endTimeUs = if (representationHolder.lastSegmentDurationUs > 0) {
+                startTimeUs + representationHolder.lastSegmentDurationUs
+            } else {
+                C.TIME_UNSET
+            }
             val seekTimeUs = if (queue.isEmpty()) loadPositionUs else C.TIME_UNSET
 
             // use the queue to build the buffered segments
