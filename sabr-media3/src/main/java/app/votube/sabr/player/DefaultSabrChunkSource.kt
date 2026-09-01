@@ -285,7 +285,7 @@ class DefaultSabrChunkSource(
                     val isInitialEdge = headSeq != null && headSeq > 100 && targetMs < 1000 && (headTimeMs ?: 0L) > 60_000
                     if (isInitialEdge) {
                         segmentNum = headSeq!!
-                        requestedTimeMs = (headTimeMs ?: 0L) - 5000 // 5с до головы — live edge
+                        requestedTimeMs = (headTimeMs ?: 0L) - 15000 // 15с до головы — стабильно как в браузере
                         sabrClient.hasStartedLive = true
                         android.util.Log.i("SabrChunkSource", "live initial head: headSeq=$headSeq headTimeMs=$headTimeMs -> segmentNum=$segmentNum requestedTimeMs=$requestedTimeMs")
                     } else if (headSeq != null && headTimeMs != null && minSeekMs != null) {

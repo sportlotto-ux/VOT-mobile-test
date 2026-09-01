@@ -195,8 +195,8 @@ class SabrMediaSource(
         val windowMs = if (headTimeMs > minSeekMs) headTimeMs - minSeekMs else 0L
         if (windowMs <= 0) return
         val windowUs = Util.msToUs(windowMs)
-        // Дефолт — 5 сек до головы (live edge), но не меньше 5 сек от начала
-        val defaultPosUs = (windowUs - Util.msToUs(5000)).coerceAtLeast(Util.msToUs(5000).coerceAtMost(windowUs / 2))
+        // Стабильность как в браузере — 15 сек до головы (3 сегмента), не меньше 5 сек от начала
+        val defaultPosUs = (windowUs - Util.msToUs(15000)).coerceAtLeast(Util.msToUs(5000).coerceAtMost(windowUs / 2))
         // Обновляем только если окно выросло (голова движется)
         if (windowUs != liveWindowDurationUs) {
             liveWindowDurationUs = windowUs
