@@ -198,7 +198,7 @@ class SabrClient private constructor(
             withContext(dispatcher) {
                 var format = initializedFormats[itag]
                 repeat(if (liveMetadata != null) LIVE_REQUEST_RETRIES else 1) { attempt ->
-                    if (format == null || !format.hasSegment(playbackRequest.segment)) {
+                    if (format?.hasSegment(playbackRequest.segment) != true) {
                         if (attempt > 0) delay(LIVE_RETRY_DELAY_MS)
                         media(playbackRequest)
                         initializedFormats.keys.retainAll { key ->
@@ -206,7 +206,10 @@ class SabrClient private constructor(
                         }
                         format = initializedFormats[itag]
                     }
-                    format?.getSegment(playbackRequest.segment)?.let { return@withContext it }
+                    if (format?.hasSegment(playbackRequest.segment) == true) {
+                        val segment = format!!.getSegment(playbackRequest.segment)
+                        if (segment != null) return@withContext segment
+                    }
                 }
                 null
             }
