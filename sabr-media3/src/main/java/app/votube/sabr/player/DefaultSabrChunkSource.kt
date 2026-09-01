@@ -317,7 +317,10 @@ class DefaultSabrChunkSource(
                     // команда перемотки. Иначе он перебивает реальную позицию (запуск/переключение трека/реконнект)
                     // и мы тянем середину или начало вместо нужного места. Ненулевой seek — реальная команда.
                     val serverSeekMs = rawSeek?.takeIf { it != 0L || !headIsBig }
-                    val isInitialEdge = !sabrClient.hasStartedLive && headSeq != null && headSeq > 100 && targetMs < 1000 && headIsBig
+                    // initial edge — любой первый запрос трека (previousChunk==null) с маленьким target и большой головой
+                    // должен идти к head-15с. Глобальный hasStartedLive ломал второй трек (аудио/видео): первый трек уже выставлял
+                    // hasStartedLive=true, второй с previousChunk==null попадал в DVR mapping 0 → segment 0/7417 вместо головы.
+                    val isInitialEdge = headSeq != null && headSeq > 100 && targetMs < 1000 && headIsBig
                     // Причина проблемы pXBfmgk9lSU: сервер после init шлёт seek=0 (начало), а голова 1153 (2300с) —
                     // если слушаем seek=0, просим середину (692) вместо края, получаем 1,2,3 и петлю no segment 693.
                     // Для live edge игнорируем seek=0 и берём голову.
@@ -361,11 +364,17 @@ class DefaultSabrChunkSource(
                     }
                     }
                 } else {
-                    // sequential live: previousChunk.endTimeUs — это DVR offset (0..window), для сервера нужен абсолютный headTime
-                    val minSeekForSeq = minSeekMs ?: 0L
-                    requestedTimeMs = minSeekForSeq + Util.usToMs(previousChunk.endTimeUs)
-                    // segmentNum уже выставлен через lastReturned/nextChunkIndex, но подчищаем лог
-                    android.util.Log.i("SabrChunkSource", "live sequential: prevEndMs=${Util.usToMs(previousChunk.endTimeUs)} minSeek=$minSeekForSeq -> requestedTimeMs=$requestedTimeMs segmentNum=$segmentNum")
+                    // sequential live: segmentNum уже из lastReturned (точный номер от сервера) или nextChunkIndex,
+                    // поэтому абсолютное requestedTimeMs считаем от головы, а не от DVR offset (prevEnd 0..window),
+                    // иначе для head 12360/24719с получаем 1000 вместо 24704xxx и вечный fallback.
+                    val estDurationMs = if (representationHolder.lastSegmentDurationUs > 0) representationHolder.lastSegmentDurationUs / 1000 else 5000L
+                    if (headSeq != null && headTimeMs != null) {
+                        requestedTimeMs = headTimeMs - (headSeq - segmentNum) * estDurationMs
+                    } else {
+                        val minSeekForSeq = minSeekMs ?: 0L
+                        requestedTimeMs = minSeekForSeq + Util.usToMs(previousChunk.endTimeUs)
+                    }
+                    android.util.Log.i("SabrChunkSource", "live sequential: segmentNum=$segmentNum headSeq=$headSeq headTimeMs=$headTimeMs -> requestedTimeMs=$requestedTimeMs")
                 }
                 android.util.Log.i(
                     "SabrChunkSource",
