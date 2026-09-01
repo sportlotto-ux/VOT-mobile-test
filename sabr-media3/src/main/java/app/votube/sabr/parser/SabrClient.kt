@@ -133,6 +133,9 @@ class SabrClient private constructor(
     var serverSeekTimeMs: Long? = null; private set
     /** listener для головы эфира — чтобы плеер мог обновить таймлайн и позволить перемотку назад */
     var liveMetadataListener: ((LiveMetadata) -> Unit)? = null
+    /** sequence последнего реально отданного сервером сегмента по itag — чтобы следующий запрос
+     *  шёл от реальной нумерации сервера, а не от локально посчитанного индекса (нормализация по времени) */
+    private val lastReturnedSequenceByItag = mutableMapOf<Int, Long>()
     /** флаг что live уже стартовал с головы — нужен чтобы отличить начальный edge от DVR rewind к началу */
     var hasStartedLive: Boolean = false
     private var lastRequestMs: Long? = null
@@ -177,6 +180,10 @@ class SabrClient private constructor(
     fun isLive(): Boolean = liveMetadata != null
     fun getDownloadedSegmentsDebug(itag: Int): String =
         initializedFormats[itag]?.downloadedSegments?.keys?.sorted()?.toString() ?: "no format"
+
+    /** sequence последнего отданного сегмента для itag, или null если ещё не отдавали.
+     *  ChunkSource использует его, чтобы следующий live-запрос шёл от реальной нумерации сервера. */
+    fun getLastReturnedSequence(itag: Int): Long? = lastReturnedSequenceByItag[itag]
 
     fun getMinSeekableTimeMs(): Long? = liveMetadata?.let {
         if (it.hasMinSeekableTimeTicks() && it.hasMinSeekableTimescale() && it.minSeekableTimescale != 0)
@@ -242,70 +249,52 @@ class SabrClient private constructor(
                     }
                     if (format?.hasSegment(playbackRequest.segment) == true) {
                         val segment = format!!.getSegment(playbackRequest.segment)
-                        if (segment != null) return@withContext segment
+                        if (segment != null) {
+                            lastReturnedSequenceByItag[itag] = segment.sequenceNumber
+                            return@withContext segment
+                        }
                     }
                 }
-                // Live: слушать голову эфира и проверять отрезок пройденного времени для DVR
+                // Live: нормализованное сопоставление сегментов ПО ВРЕМЕНИ (startMs), а не по строгому
+                // равенству requestedSequence == protobuf.sequence. Сервер выбирает чанк по playerTimeMs и
+                // может вернуть другой sequence, чем запросил клиент — ищем ближайший по времени чанк,
+                // а следующий запрос уходит от реально отданного sequence (lastReturnedSequenceByItag).
                 if (liveMetadata != null) {
                     val fallbackFormat = initializedFormats[itag]
                     if (fallbackFormat != null && fallbackFormat.downloadedSegments.isNotEmpty()) {
                         val avail = fallbackFormat.downloadedSegments.keys.sorted()
                         val headSeq = liveMetadata?.headSequenceNumber
-                        val headTime = liveMetadata?.headTimeMs
-                        val serverSeek = serverSeekTimeMs // не consume здесь, пусть ChunkSource решает
-                        Log.w(TAG, "live fallback: requested ${playbackRequest.segment} not found, available=$avail, headSeq=$headSeq, headTimeMs=$headTime, serverSeekMs=$serverSeek, requestedTimeMs=${playbackRequest.segmentStartTimeMs}")
-                        // 1) Если сервер прислал SABR_SEEK — берём только на старте/seek (requested <=10), иначе последовательные идут по порядку
-                        if (serverSeek != null && playbackRequest.segment <= 10) {
-                            val bySeek = fallbackFormat.downloadedSegments.values.minByOrNull { kotlin.math.abs(it.header.startMs - serverSeek) }
-                            if (bySeek != null) {
-                                val seg = fallbackFormat.getSegment(bySeek.sequenceNumber)
+                        val requestedSeq = playbackRequest.segment
+                        val requestedTime = playbackRequest.segmentStartTimeMs
+                        Log.w(TAG, "live fallback: requested $requestedSeq not found, available=$avail, headSeq=$headSeq, headTimeMs=${liveMetadata?.headTimeMs}, serverSeekMs=$serverSeekTimeMs, requestedTimeMs=$requestedTime")
+                        // 1) Точный sequence (обычный согласованный случай)
+                        var seg: Segment? = fallbackFormat.getSegment(requestedSeq)
+                        // 2) По времени: сервер вернул другой sequence, но чанк покрывает запрошенное время
+                        if (seg == null) {
+                            val byTime = fallbackFormat.downloadedSegments.values
+                                .minByOrNull { kotlin.math.abs(it.header.startMs - requestedTime) }
+                            if (byTime != null && kotlin.math.abs(byTime.header.startMs - requestedTime) < LIVE_TIME_TOLERANCE_MS) {
+                                seg = fallbackFormat.getSegment(byTime.sequenceNumber)
                                 if (seg != null) {
-                                    Log.i(TAG, "live fallback by serverSeek: returning seq ${bySeek.sequenceNumber} startMs=${bySeek.header.startMs} for seek $serverSeek instead of ${playbackRequest.segment}")
-                                    serverSeekTimeMs = null
-                                    return@withContext seg
-                                }
-                            }
-                        } else if (serverSeek != null) {
-                            // для последовательных — просто чистим устаревший seek, не делаем фолбэк
-                            serverSeekTimeMs = null
-                        }
-                        // 2) Если запросили начало (1/2), а голова 6087 — стартуем с головы (live edge)
-                        if (headSeq != null && playbackRequest.segment <= 10 && headSeq > 100) {
-                            val headSeg = fallbackFormat.downloadedSegments[headSeq]
-                                ?: fallbackFormat.downloadedSegments[headSeq - 1]
-                                ?: fallbackFormat.downloadedSegments.values.maxByOrNull { it.sequenceNumber }
-                            if (headSeg != null) {
-                                val seg = fallbackFormat.getSegment(headSeg.sequenceNumber)
-                                if (seg != null) {
-                                    Log.i(TAG, "live head fallback: requested ${playbackRequest.segment} far from head $headSeq, returning head seq ${headSeg.sequenceNumber} startMs=${headSeg.header.startMs}")
-                                    hasStartedLive = true
-                                    return@withContext seg
+                                    Log.i(TAG, "live fallback by time: returned seq ${seg.sequenceNumber} startMs=${seg.header.startMs} ~ requestedTime $requestedTime instead of $requestedSeq")
                                 }
                             }
                         }
-                        // 3) DVR rewind: только для старта/seek (requested <=10), иначе последовательные не трогаем
-                        if (playbackRequest.segment <= 10) {
-                            val byTime = fallbackFormat.downloadedSegments.values.minByOrNull { kotlin.math.abs(it.header.startMs - playbackRequest.segmentStartTimeMs) }
-                            // берём только если близко по времени (< 5 сек) чтобы не отдавать рандом
-                            if (byTime != null && kotlin.math.abs(byTime.header.startMs - playbackRequest.segmentStartTimeMs) < 5_000) {
-                                val seg = fallbackFormat.getSegment(byTime.sequenceNumber)
-                                if (seg != null) {
-                                    Log.i(TAG, "live time fallback: returning seq ${byTime.sequenceNumber} startMs=${byTime.header.startMs} ~ requestedTime ${playbackRequest.segmentStartTimeMs}")
-                                    return@withContext seg
-                                }
-                            }
-                        }
-                        // 4) последний шанс — ближайший к голове только для старта
-                        if (headSeq != null && playbackRequest.segment <= 10) {
-                            val nearestHead = avail.minByOrNull { kotlin.math.abs(it - headSeq) }
+                        // 3) Последний шанс — ближайший к голове (live edge / reconnect в середине эфира)
+                        if (seg == null && headSeq != null) {
+                            val nearestHead = fallbackFormat.downloadedSegments.keys.minByOrNull { kotlin.math.abs(it - headSeq) }
                             if (nearestHead != null) {
-                                val seg = fallbackFormat.getSegment(nearestHead)
+                                seg = fallbackFormat.getSegment(nearestHead)
                                 if (seg != null) {
-                                    Log.i(TAG, "live nearest head fallback: returning $nearestHead for head $headSeq")
+                                    Log.i(TAG, "live nearest head fallback: returned $nearestHead for head $headSeq")
                                     hasStartedLive = true
-                                    return@withContext seg
                                 }
                             }
+                        }
+                        if (seg != null) {
+                            lastReturnedSequenceByItag[itag] = seg.sequenceNumber
+                            serverSeekTimeMs = null
+                            return@withContext seg
                         }
                     }
                 }
@@ -512,5 +501,7 @@ class SabrClient private constructor(
         private const val YOUTUBE_FRONTEND_URL = "https://www.youtube.com"
         private const val LIVE_REQUEST_RETRIES = 3
         private const val LIVE_RETRY_DELAY_MS = 250L
+        /** максимальное расхождение по времени (мс) для фолбэка «по времени» — чтобы не отдавать рандомный чанк */
+        private const val LIVE_TIME_TOLERANCE_MS = 30_000L
     }
 }

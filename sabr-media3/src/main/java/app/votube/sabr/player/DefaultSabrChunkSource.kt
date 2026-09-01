@@ -258,6 +258,14 @@ class DefaultSabrChunkSource(
             // Request the next media segment using server metadata (endSegmentNumber)
             // instead of a client-built ChunkIndex.
             var segmentNum = previousChunk?.nextChunkIndex ?: 0
+            // Для live идём от РЕАЛЬНО отданного сервером sequence (нормализация): сервер может
+            // вернуть другой номер, чем наш счётчик, поэтому следующий запрос должен продолжать
+            // именно от серверной нумерации, иначе уйдём в петлю no segment.
+            if (isLive && previousChunk != null) {
+                sabrClient.getLastReturnedSequence(representationHolder.representation.streamInfo.itag)?.let {
+                    segmentNum = it
+                }
+            }
             var requestedTimeMs = Util.usToMs(previousChunk?.endTimeUs ?: loadPositionUs)
             if (isLive) {
                 val downloaded = sabrClient.getDownloadedSegmentsDebug(representationHolder.representation.streamInfo.itag)
