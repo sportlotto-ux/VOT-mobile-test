@@ -422,14 +422,16 @@ class DefaultSabrChunkSource(
                 }
             }
 
-            // Live: start должен соответствовать window-позиции запрошенного времени (requestedTimeMs - minSeek),
-            // иначе получаем огромный readahead -11237с (load 0 vs playback head) и постоянный ABR 144p + фризы.
-            // Для A/V синхронизации берём window-позицию requestedTime и для sequential, а не per-track previousChunk.endTimeUs,
-            // иначе аудио (2247468) и видео (2247470) разъезжаются на 10с → видео фризит, аудио повторяет старый кусок.
+            // Live: start должен соответствовать window-позиции запрошенного времени для initial,
+            // иначе readahead -11237с. Для sequential берём previousChunk.endTimeUs чтобы очередь была континуальна,
+            // иначе аудио и видео разъедутся по startTime (gap) и loadPosition застрянет.
             val startTimeUs = if (isLive) {
-                val windowStartMs = sabrClient.getMinSeekableTimeMs() ?: 0L
-                val windowPosMs = (requestedTimeMs - windowStartMs).coerceIn(0L, 300_000L) // до 5мин окна
-                Util.msToUs(windowPosMs)
+                if (previousChunk != null) previousChunk.endTimeUs
+                else {
+                    val windowStartMs = sabrClient.getMinSeekableTimeMs() ?: 0L
+                    val windowPosMs = (requestedTimeMs - windowStartMs).coerceIn(0L, 300_000L)
+                    Util.msToUs(windowPosMs)
+                }
             } else previousChunk?.endTimeUs ?: loadPositionUs
             if (!isLive && startTimeUs >= representationHolder.periodDurationUs) {
                 // The period duration clips the period to a position before the segment.
