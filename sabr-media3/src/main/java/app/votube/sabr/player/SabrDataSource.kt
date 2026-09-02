@@ -37,6 +37,14 @@ class SabrDataSource(
         val playbackRequest = dataSpec.customData as? PlaybackRequest
             ?: throw IOException("SABR data source requires PlaybackRequest")
 
+        // Снимок сетевого счётчика ДО раундтрипа: метр пропускной способности (DefaultBandwidthMeter)
+        // считает сэмпл по окну transferStarted→close, а окно это включает SABR-раундтрип
+        // (getNextSegment блокируется на HTTP + ретраи + backoff). Раньше за это время метр видел
+        // только байты одного сегмента => сэмпл «сегмент за раундтрип» => оценка канала рушилась
+        // (иногда до кбит/с) => ABR сползал по лестнице в 144p (лог 11:35:59→11:36:29:
+        // 399 -> 398 -> 394). Ниже докладываем метру РЕАЛЬНЫЕ байты ответа сервера.
+        val networkBytesBefore = sabrClient.networkBytesSnapshot()
+
         transferInitializing(dataSpec)
         transferStarted(dataSpec)
         val segment = try {
@@ -54,6 +62,15 @@ class SabrDataSource(
                 "open: failed to get segment ${playbackRequest.segment} for ${playbackRequest.format.itag}: $e"
             )
             throw IOException("SABR segment request failed", e)
+        }
+
+        // Атрибуция: раундтрип вернул и другие сегменты (префетч аудио+видео одним ответом).
+        // Байты самого сегмента посчитает read() (bytesTransferred), поэтому отдаём разницу.
+        // Для сегмента из кэша дельта = 0 — сэмпл «почти мгновенной» передачи метр отбросит сам
+        // (нулевой интервал не становится сэмплом), спайков вверх не будет.
+        val networkDelta = sabrClient.networkBytesSnapshot() - networkBytesBefore
+        if (networkDelta > segment.length()) {
+            bytesTransferred((networkDelta - segment.length()).toInt())
         }
 
         data = CompositeBuffer(segment.data)

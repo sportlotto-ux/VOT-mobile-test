@@ -135,8 +135,11 @@ class DefaultSabrChunkSource(
     }
 
     override fun updateTrackSelection(trackSelection: ExoTrackSelection?) {
+        if (trackSelection == null) throw IllegalArgumentException("SABR track selection must not be null")
+        // Новый объект селекции = новая политика приложения (качество/параметры). Стартовое окно
+        // гистерезиса считаем заново — иначе сразу после re-select подавление уже «прогорело».
+        if (this.trackSelection !== trackSelection) lastTrackSwitchMs = 0L
         this.trackSelection = trackSelection
-            ?: throw IllegalArgumentException("SABR track selection must not be null")
     }
 
     override fun maybeThrowError() {
@@ -209,14 +212,18 @@ class DefaultSabrChunkSource(
         // changing the format on the next selection, ensuring there is some data already buffered.
         var representationHolder = representationHolders[trackSelection.selectedIndex]
         sabrClient.selectFormat(representationHolder.representation)
-        // Hysteresis for live ABR: avoid spiral downgrades and start-at-144p.
-        // Было: suppress только если !critical && queue>=2 — на старте buffer 0 < min (2000) => critical true,
-        // поэтому сразу даунгрейд к 144p. Теперь подавляем даунгрейд 10с даже при critical, если буфер >500мс
-        // и очередь не пуста — держим высокое качество первые секунды, даём буферу набраться.
+        // Hysteresis for live ABR: suppress downgrade spirals and the start-at-144p slide.
+        // Лог 11:35:59→11:36:29: старт на 399 (1080p AV1), за 30с сползание 398→394 (144p).
+        // Причины: (1) метр пропускной способности видел SABR-раундтрип как «медленную передачу»
+        // (исправлено в SabrDataSource — атрибуция реальных байтов ответа); (2) стартовое окно
+        // гистерезиса не работало: queue==0 && buffered==0 => suppress=false. Теперь старт
+        // (lastTrackSwitchMs==0) считается свежим переключением, подавление действует пока есть
+        // хоть что-то в буфере/очереди; даунгрейд определяем и по битрейту, и по высоте (битрейт
+        // в манифесте бывает неизвестен). Полная пустота буфера снимает подавление — выживание.
         val nowMs = SystemClock.elapsedRealtime()
         val timeSinceSwitchMs = nowMs - lastTrackSwitchMs
         val bufferedMs = Util.usToMs(bufferedDurationUs)
-        val isRecentlySwitched = lastTrackSwitchMs != 0L && timeSinceSwitchMs < 10_000
+        val isRecentlySwitched = lastTrackSwitchMs == 0L || timeSinceSwitchMs < 10_000
         val beforeIndex = trackSelection.selectedIndex
         val beforeFormat = trackSelection.selectedFormat
         trackSelection.updateSelectedTrack(
@@ -227,15 +234,22 @@ class DefaultSabrChunkSource(
             chunkIterators,
         )
         val afterIndex = trackSelection.selectedIndex
-        val isDowngrade = afterIndex != beforeIndex && trackSelection.getFormat(afterIndex).bitrate < beforeFormat.bitrate
-        val shouldSuppressDowngrade = isLive && isRecentlySwitched && isDowngrade && queue.size >= 1 && bufferedMs > 500
+        val afterFormat = trackSelection.getFormat(afterIndex)
+        val bitrateDowngrade = beforeFormat.bitrate > 0 && afterFormat.bitrate > 0 &&
+            afterFormat.bitrate < beforeFormat.bitrate
+        val heightDowngrade = beforeFormat.height > 0 && afterFormat.height > 0 &&
+            afterFormat.height < beforeFormat.height
+        val isDowngrade = afterIndex != beforeIndex && (bitrateDowngrade || heightDowngrade)
+        val hasBufferOrQueue = bufferedMs > 500 || queue.isNotEmpty()
+        val shouldSuppressDowngrade = isLive && isDowngrade && isRecentlySwitched && hasBufferOrQueue
         if (shouldSuppressDowngrade) {
             android.util.Log.i(
                 "SabrChunkSource",
-                "ABR hysteresis: suppress downgrade $beforeIndex -> $afterIndex (recent ${timeSinceSwitchMs}ms ago, buf=${bufferedMs}ms, queue=${queue.size})"
+                "ABR hysteresis: suppress downgrade $beforeIndex -> $afterIndex " +
+                    "(recent ${timeSinceSwitchMs}ms ago, buf=${bufferedMs}ms, queue=${queue.size})"
             )
-            // Для текущего чанка используем старый holder (высокое качество), селектор остаётся на низком
-            // но следующий getNextChunk снова предложит даунгрейд и снова подавит — держим 10с
+            // Для текущего чанка используем старый holder (высокое качество), селектор остаётся на низком:
+            // следующий getNextChunk снова предложит даунгрейд и снова подавит — окно 10с от последнего свитча.
             representationHolder = representationHolders[beforeIndex]
         } else {
             if (afterIndex != beforeIndex) {

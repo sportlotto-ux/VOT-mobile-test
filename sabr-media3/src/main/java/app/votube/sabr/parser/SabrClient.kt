@@ -3,7 +3,9 @@ package app.votube.sabr.parser
 import android.content.Context
 import android.os.SystemClock
 import android.util.Log
+import java.io.FilterInputStream
 import java.io.IOException
+import java.util.concurrent.atomic.AtomicLong
 import androidx.annotation.OptIn
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.util.UnstableApi
@@ -162,6 +164,16 @@ class SabrClient private constructor(
     var playbackStartPolicy: PlaybackStartPolicy? = null
         private set
     private val bandwidthEstimator by lazy { DefaultBandwidthMeter.getSingletonInstance(appContext) }
+    /** Монотонный максимум высоты выбранного видео за сессию — защита sticky-разрешения от «запирания»:
+    *   однажды сползший в 144p выбор не должен стать для сервера «пользовательским решением» навсегда. */
+    private var stickyResolutionMax: Int = 0
+    /** Суммарные байты, полученные по сети SABR-раундтрипами. SabrDataSource атрибутирует их
+    *   метру пропускной способности: окно замера включает сетевое ожидание, но без этих байтов
+    *   сэмпл = «один сегмент за раундтрип» → оценка канала рушится → ABR сползает в 144p. */
+    private val networkBytesCounter = AtomicLong(0)
+
+    /** Снапшот сетевого счётчика для дельты вокруг блокирующего getNextSegment. */
+    fun networkBytesSnapshot(): Long = networkBytesCounter.get()
 
     constructor(context: Context, manifest: SabrManifest, poTokenProvider: PoTokenProvider? = null) : this(
         context.applicationContext, manifest.videoId, manifest.serverAbrStreamingUri.toString(),
@@ -184,6 +196,8 @@ class SabrClient private constructor(
                     "mime=${representation.format.containerMimeType}, codec=${representation.format.codecs}")
             }
             videoFormat = representation
+            val height = representation.streamInfo.height ?: 0
+            if (height > stickyResolutionMax) stickyResolutionMax = height
         }
         lastFormatUseMs[representation.streamInfo.itag] = SystemClock.elapsedRealtime()
     }
@@ -443,6 +457,9 @@ class SabrClient private constructor(
         // Снимок состояния под локом: формат/контексты мутируются из других loader-потоков
         val abr = withState {
             val xtags = audioFormat?.formatId()?.xtags?.let { Xtags(it) }
+            // sticky/manual — максимум высоты за сессию: сервер не должен «запирать» качество
+            // на упавшем разрешении, если клиентский ABR на миг сполз вниз.
+            val stickyResolutionHeight = max(videoFormat?.streamInfo?.height ?: 0, max(stickyResolutionMax, 360))
             val state = ClientAbrState.newBuilder().setPlayerTimeMs(playbackRequest.segmentStartTimeMs)
                 .setEnabledTrackTypesBitfield(if (videoFormat == null) 1 else 0)
                 .setPlaybackRate(playbackRequest.playbackSpeed)
@@ -453,11 +470,14 @@ class SabrClient private constructor(
                 .setAudioTrackId(audioFormat?.streamInfo?.audioTrackId ?: "")
                 .setDrcEnabled(audioFormat?.streamInfo?.isDrc == true || xtags?.isDrcAudio() == true)
                 .setEnableVoiceBoost(xtags?.isVoiceBoosted() ?: false).setClientViewportIsFlexible(false)
-                .setBandwidthEstimate(bandwidthEstimator.bitrateEstimate)
-                .setStickyResolution(max(videoFormat?.streamInfo?.height ?: 0, 360))
+                // Пол 1 Мбит/с на оценке, докладываемой серверу: после сбойной сессии синглтон-метр
+                // (живёт весь процесс) мог остаться на кбит/с — тогда сервер запирает качество на
+                // минимуме и СЛЕДУЮЩИЙ эфир стартует сразу в 144p. Реальный канал поднимет выше.
+                .setBandwidthEstimate(maxOf(bandwidthEstimator.bitrateEstimate, MIN_REPORTED_BANDWIDTH_BPS))
+                .setStickyResolution(stickyResolutionHeight)
                 .setClientViewportHeight(max(videoFormat?.streamInfo?.height ?: 0, 360))
                 .setClientViewportWidth(max(videoFormat?.streamInfo?.width ?: 0, 640))
-                .setLastManualSelectedResolution(max(videoFormat?.streamInfo?.height ?: 0, 360)).setVisibility(1).build()
+                .setLastManualSelectedResolution(stickyResolutionHeight).setVisibility(1).build()
             VideoPlaybackAbrRequest.newBuilder().setClientAbrState(state)
                 .setPlayerTimeMs(playbackRequest.segmentStartTimeMs).setVideoPlaybackUstreamerConfig(ustreamerConfig)
                 .addAllPreferredAudioFormatIds(listOfNotNull(audioFormat?.formatId()))
@@ -478,15 +498,27 @@ class SabrClient private constructor(
             .addHeader("Referer", "$YOUTUBE_FRONTEND_URL/").addHeader("User-Agent", USER_AGENT)
             .post(RequestBody.create(MediaType.parse(CONTENT_TYPE), abr.toByteArray())).build()
         lastRequestMs = SystemClock.elapsedRealtime()
+        val roundtripStartMs = SystemClock.elapsedRealtime()
+        val networkBytesBefore = networkBytesCounter.get()
         client.newCall(request).execute().use { response ->
             if (!response.isSuccessful) throw IOException("HTTP request failed: ${response.code()}")
             val body = response.body() ?: throw IOException("HTTP response has no body")
-            val reader = StreamingUmpReader(body.byteStream())
+            // Считаем реальные байты ответа (identity — размер на проводе): SabrDataSource
+            // атрибутирует их метру пропускной способности, чтобы сэмпл отражал фактическую
+            // скорость канала, а не «один сегмент за полный раундтрип».
+            val countingStream = object : FilterInputStream(body.byteStream()) {
+                override fun read(b: ByteArray, off: Int, len: Int): Int =
+                    super.read(b, off, len).also { if (it > 0) networkBytesCounter.addAndGet(it.toLong()) }
+                override fun read(): Int =
+                    super.read().also { if (it >= 0) networkBytesCounter.incrementAndGet() }
+            }
+            val reader = StreamingUmpReader(countingStream)
             while (true) {
                 val part = reader.readPart() ?: break
                 processPart(part)
             }
         }
+        Log.i(TAG, "media roundtrip: bytes=${networkBytesCounter.get() - networkBytesBefore}, ms=${SystemClock.elapsedRealtime() - roundtripStartMs}")
     }
 
     private fun processPart(part: Part) {
@@ -654,5 +686,8 @@ class SabrClient private constructor(
         /** допустимый сдвиг НАЗАД от запрошенного времени (мс) — только дрожание границ при
          *  перенумерации сервера. Всё, что старее — повтор уже проигранного чанка (запрещено). */
         private const val SAME_TIME_EPS_MS = 1_500L
+        /** Пол оценки канала, докладываемой серверу (бит/с): не даём обрушившемуся сэмплу
+         *  метра «запереть» серверный ABR на минимуме между сессиями. */
+        private const val MIN_REPORTED_BANDWIDTH_BPS = 1_000_000L
     }
 }
