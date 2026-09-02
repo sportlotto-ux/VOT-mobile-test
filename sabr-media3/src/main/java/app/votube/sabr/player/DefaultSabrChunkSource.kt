@@ -341,6 +341,19 @@ class DefaultSabrChunkSource(
                 val loadMsRaw = Util.usToMs(loadPositionUs)
                 val loadAbsMs = if (windowStartMs0 != null && loadMsRaw < windowStartMs0) windowStartMs0 + loadMsRaw else loadMsRaw
                 val loadRelMs = windowStartMs0?.let { loadAbsMs - it } ?: loadMsRaw
+                // Seek/DVR remap НАЗАД: позиция очереди ушла от якоря больше чем на 5с — якорь
+                // описывает уже не ту точку эфира, последовательные запросы продолжат из прошлого
+                // (лог 13:31:41: якорь в районе seq=721 при очереди на 728 → повторная отдача
+                // старых сегментов = микрофриз/луп). Сбрасываем ДО выбора ветки (покрывает и
+                // initial после seek, и sequential) — планировщик продолжит от реальной позиции.
+                representationHolder.representation.streamInfo.itag.let { currentItag ->
+                    sabrClient.getLastReturnedTimeMs(currentItag)?.let { anchorMs ->
+                        if (loadAbsMs < anchorMs - 5_000) {
+                            sabrClient.resetTimeAnchors(currentItag)
+                            android.util.Log.w("SabrChunkSource", "live re-anchor: itag=$currentItag queue $loadAbsMs is ${anchorMs - loadAbsMs}ms behind served anchor $anchorMs -> reset time anchors")
+                        }
+                    }
+                }
                 // Слушаем голову эфира: для live edge берём headSeq, для DVR rewind — проверяем пройденное время
                 // SABR_SEEK обрабатываем только на seek/initial (когда queue пуст), иначе последовательные сегменты идут по порядку
                 if (previousChunk == null) {
@@ -447,16 +460,23 @@ class DefaultSabrChunkSource(
                     // ДЕКЛАРИРУЕМОМУ концу очереди (после flush/seek якорь и очередь могут разъехаться
                     // по отдельности). Тянуть прошлое при живом плеере = буфер-минус → фриз и луп.
                     // Обычное отставание от ПРЕФЕТЧА другого трека не трогаем — догоняется естественно.
+                    // Ориентируемся и на ПОЗИЦИЮ ОЧЕРЕДИ (loadPosition): после flush/remap
+                    // playbackPositionUs ещё старый (лог 13:31:41.840: requested 3605014 при очереди
+                    // 3639979 → повтор seq=721), а очередь уже на новой позиции. Порог по очереди шире
+                    // (6с), чтобы нормальный рывок декларируемого конца не давал ложных прыжков.
                     val playerTimeMs = Util.usToMs(loadingInfo.playbackPositionUs)
-                    if (requestedTimeMs < playerTimeMs - 4000 || declaredEndMs < playerTimeMs - 4000) {
-                        val catchUpMs = maxOf(playerTimeMs, sabrClient.getMaxLastReturnedTimeMs()?.takeIf { it > playerTimeMs } ?: playerTimeMs)
+                    val behindPlayback = requestedTimeMs < playerTimeMs - 4000 || declaredEndMs < playerTimeMs - 4000
+                    val behindQueue = requestedTimeMs < loadAbsMs - 6000 || declaredEndMs < loadAbsMs - 6000
+                    if (behindPlayback || behindQueue) {
+                        val refTimeMs = maxOf(playerTimeMs, loadAbsMs)
+                        val catchUpMs = maxOf(refTimeMs, sabrClient.getMaxLastReturnedTimeMs()?.takeIf { it > refTimeMs } ?: refTimeMs)
                         requestedTimeMs = headTimeMs?.let { minOf(catchUpMs, it) } ?: catchUpMs
                         if (headSeq != null && headTimeMs != null) {
                             val offsetMs = (headTimeMs - requestedTimeMs).coerceAtLeast(0)
                             segmentNum = maxOf(0L, headSeq - offsetMs / maxOf(estDurationMs, 1))
                         }
                         jumpedForSync = true
-                        android.util.Log.w("SabrChunkSource", "live catch-up: itag=$currentItag requested $requestedTimeMs was behind playback $playerTimeMs (declaredEnd=$declaredEndMs) -> jump (segmentNum=$segmentNum)")
+                        android.util.Log.w("SabrChunkSource", "live catch-up: itag=$currentItag requested $requestedTimeMs was behind playback $playerTimeMs/queue $loadAbsMs (declaredEnd=$declaredEndMs) -> jump (segmentNum=$segmentNum)")
                     }
                     android.util.Log.i("SabrChunkSource", "live sequential: segmentNum=$segmentNum headSeq=$headSeq headTimeMs=$headTimeMs -> requestedTimeMs=$requestedTimeMs itag=${representationHolder.representation.streamInfo.itag} jumped=$jumpedForSync")
                 }
@@ -519,13 +539,24 @@ class DefaultSabrChunkSource(
             // For live streams the manifest duration is TIME_UNSET. A zero duration is
             // still valid for the first request; media3 will use the next request to
             // advance the live queue.
-            val endTimeUs = if (representationHolder.lastSegmentDurationUs > 0) {
-                startTimeUs + representationHolder.lastSegmentDurationUs
-            } else {
-                // Media3 requires a finite end time for ContainerMediaChunk. The
-                // server-segment duration is learned from SabrDataSource after the
-                // first response, so use one second only for the initial live chunk.
-                startTimeUs + 1_000_000L
+            // Конец чанка = РЕАЛЬНОЕ время старта следующего сегмента (если уже лежит в
+            // префетче): декларируемая durationMs у части эфиров расходится с реальным ритмом
+            // (лог 13:32-13:34: 3-7с декларируемых при реальном шаге 2с) → очередь убегала от
+            // сэмплов fMP4 → плеер считал буфер «виртуальным», семплы кончались → микрофриз.
+            val nextSegmentStartUs = if (isLive) {
+                sabrClient.peekSegmentStartMs(
+                    representationHolder.representation.streamInfo.itag,
+                    segmentNum + 2, // текущий чанк = сегмент segmentNum+1, следующий = +2
+                )?.takeIf { it > Util.usToMs(startTimeUs) }?.let { Util.msToUs(it) }
+            } else null
+            val endTimeUs = when {
+                nextSegmentStartUs != null -> nextSegmentStartUs
+                representationHolder.lastSegmentDurationUs > 0 -> startTimeUs + representationHolder.lastSegmentDurationUs
+                else ->
+                    // Media3 requires a finite end time for ContainerMediaChunk. The
+                    // server-segment duration is learned from SabrDataSource after the
+                    // first response, so use one second only for the initial live chunk.
+                    startTimeUs + 1_000_000L
             }
             val seekTimeUs = if (queue.isEmpty()) loadPositionUs else C.TIME_UNSET
 
@@ -681,7 +712,13 @@ class DefaultSabrChunkSource(
         // NOTE: Chunk.dataSource is protected in media3 1.4.1 — all chunks here are
         // created by this source against `this.dataSource`, so check that instead.
         if (chunk is MediaChunk && dataSource is SabrDataSource) {
-            val durationUs = (dataSource as SabrDataSource).lastSegmentDurationUs
+            // Приоритет — наблюдаемый реальный шаг стартов эфира; декларируемая durationMs
+            // (protobuf, приходит через SabrDataSource) у части эфиров расходится с реальным
+            // ритмом (лог 13:32-13:34: 3-7с против реальных 2с) → раздутая очередь → микрофризы.
+            val reqItag = (chunk.dataSpec.customData as? PlaybackRequest)?.format?.itag
+            val realStepUs = reqItag?.let { sabrClient.getLastRealStepMs(it) }
+                ?.takeIf { it > 0 }?.let { Util.msToUs(it) }
+            val durationUs = realStepUs ?: (dataSource as SabrDataSource).lastSegmentDurationUs
             if (durationUs > 0) {
                 representationHolder.lastSegmentDurationUs = durationUs
             }

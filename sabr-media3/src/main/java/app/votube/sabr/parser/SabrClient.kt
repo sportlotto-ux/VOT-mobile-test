@@ -138,6 +138,11 @@ class SabrClient private constructor(
     /** sequence последнего реально отданного сервером сегмента по itag — чтобы следующий запрос
      *  шёл от реальной нумерации сервера, а не от локально посчитанного индекса (нормализация по времени) */
     private val lastReturnedSequenceByItag = mutableMapOf<Int, Long>()
+    /** Наблюдаемый реальный ритм эфира (мс): шаг стартов соседних отданных сегментов одного формата.
+     *  Декларируемая durationMs (protobuf) у части эфиров не совпадает с реальным шагом
+     *  (лог 13:32-13:34: durationMs 3-7с при реальном шаге 2с) → декларируемая очередь убегала
+     *  от сэмплов fMP4 → буфер «виртуально» есть, семплы кончились → микрофриз + DVR remap. */
+    private val realStepMsByItag = mutableMapOf<Int, Long>()
     /** время (startMs/endMs) последнего реально отданного сегмента по itag. Время — ОБЩИЙ домен
      *  для аудио и видео, в отличие от sequence: у каждого формата своя серия номеров (в логе одно
      *  и то же время = video seq 4567, audio seq 4570), поэтому синхронизация A/V и планирование
@@ -231,6 +236,25 @@ class SabrClient private constructor(
      *  для аудио/видео, в отличие от sequence (серии номеров у форматов разные и несравнимы). */
     fun getMaxLastReturnedTimeMs(): Long? = withState { lastReturnedTimeMsByItag.values.maxOrNull() }
 
+    /** Наблюдаемый реальный шаг стартов (мс) для itag — оценка длительности сегмента эфира,
+     *  устойчивая к расхождению декларируемой durationMs с реальным ритмом. */
+    fun getLastRealStepMs(itag: Int): Long? = withState { realStepMsByItag[itag] }
+
+    /** Реальное время старта сегмента [sequenceNumber], если он уже лежит в префетче/буфере
+     *  формата. ChunkSource декларирует конец чанка по нему — очередь совпадает с сэмплами. */
+    fun peekSegmentStartMs(itag: Int, sequenceNumber: Long): Long? = withState {
+        val f = initializedFormats[itag] ?: return@withState null
+        (f.downloadedSegments[sequenceNumber] ?: f.bufferedSegments[sequenceNumber])?.header?.startMs
+    }
+
+    /** Сброс временных якорей формата: легитимный seek/DVR remap назад — планировщик
+     *  переориентируется на позицию очереди, а не на старый якорь (иначе после перемотки
+     *  монотонный якорь тянет запросы вперёд, мимо точки перемотки). */
+    fun resetTimeAnchors(itag: Int) = withState {
+        lastReturnedTimeMsByItag.remove(itag)
+        lastReturnedEndTimeMsByItag.remove(itag)
+    }
+
     /** Начало DVR-окна, зафиксированное на первом LiveMetadata (не скользит в течение периода). */
     fun getLiveWindowStartMs(): Long? = withState { liveWindowStartMs }
 
@@ -264,12 +288,29 @@ class SabrClient private constructor(
     }
 
     /** Запомнить реально отданный сегмент: sequence (серия сервера для этого формата) и время
-     *  (общий домен аудио/видео) — на этом строятся следующие запросы и A/V синхронизация. */
+     *  (общий домен аудио/видео) — на этом строятся следующие запросы и A/V синхронизация.
+     *  Конец якоря = РЕАЛЬНОЕ время следующего сегмента (если уже лежит в префетче/буфере),
+     *  иначе наблюдаемый шаг стартов, и лишь в крайнем случае декларируемая seg.duration:
+     *  декларируемая длительность у части эфиров расходится с реальным ритмом, и очередь
+     *  начинала врать плееру (виртуальный буфер при закончившихся семплах → микрофриз). */
     private fun noteServed(itag: Int, seg: Segment) {
         withState {
+            val prevStartMs = lastReturnedTimeMsByItag[itag]
             lastReturnedSequenceByItag[itag] = seg.sequenceNumber
-            lastReturnedTimeMsByItag[itag] = seg.header.startMs
-            lastReturnedEndTimeMsByItag[itag] = seg.header.startMs + seg.duration
+            // Время якоря не двигаем назад: повторная/частичная отдача старого сегмента
+            // (лог 13:31:41: частичный seq=721 durationMs=13 откатил якорь с 3615006 на
+            // 3605014 → запросы ушли в прошлое → петля). Легитимный seek назад сбрасывает
+            // якоря через resetTimeAnchors() из ChunkSource.
+            lastReturnedTimeMsByItag[itag] = maxOf(prevStartMs ?: seg.header.startMs, seg.header.startMs)
+            val stepMs = prevStartMs?.let { seg.header.startMs - it }
+            if (stepMs != null && stepMs in 500L..60_000L) realStepMsByItag[itag] = stepMs
+            val f = initializedFormats[itag]
+            val nextStartMs = (f?.downloadedSegments?.get(seg.sequenceNumber + 1)
+                ?: f?.bufferedSegments?.get(seg.sequenceNumber + 1))?.header?.startMs
+                ?.takeIf { it > seg.header.startMs }
+            val endMs = nextStartMs
+                ?: seg.header.startMs + (realStepMsByItag[itag] ?: seg.duration)
+            lastReturnedEndTimeMsByItag[itag] = maxOf(lastReturnedEndTimeMsByItag[itag] ?: endMs, endMs)
         }
     }
 
