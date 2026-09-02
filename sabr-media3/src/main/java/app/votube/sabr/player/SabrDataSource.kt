@@ -27,6 +27,13 @@ class SabrDataSource(
     var lastSegmentDurationUs: Long = 0
         private set
 
+    // ВАЖНО: значение живёт от успешного open() до СЛЕДУЮЩЕГО open(), а НЕ до close().
+    // close() вызывается внутри Chunk.load() (finally) ДО того, как загрузчик уведомит
+    // onChunkLoadCompleted — обнуление в close() навсегда прятало реальную длительность:
+    // каждый чанк декларировался фолбэком 1с при реальных 3-4с, очередь отставала от
+    // реальных сэмплов на ~2с за пару A/V → отрицательный readahead → периодические
+    // flush/reposition → повторная отдача старых сегментов → зацикливание (лог 12:36).
+
     class Factory(
         private val sabrClient: SabrClient
     ) : DataSource.Factory {
@@ -43,6 +50,10 @@ class SabrDataSource(
         // только байты одного сегмента => сэмпл «сегмент за раундтрип» => оценка канала рушилась
         // (иногда до кбит/с) => ABR сползал по лестнице в 144p (лог 11:35:59→11:36:29:
         // 399 -> 398 -> 394). Ниже докладываем метру РЕАЛЬНЫЕ байты ответа сервера.
+        // Длительность предыдущего сегмента уже забрана/использована — сбрасываем ПЕРЕД
+        // открытием, чтобы после неудачного open() не остался мусор из прошлой сессии.
+        lastSegmentDurationUs = 0
+
         val networkBytesBefore = sabrClient.networkBytesSnapshot()
 
         transferInitializing(dataSpec)
@@ -81,8 +92,9 @@ class SabrDataSource(
     override fun getUri(): Uri? = Uri.parse("sabr://segment")
 
     override fun close() {
+        // lastSegmentDurationUs НЕ обнуляем: onChunkLoadCompleted читает его уже ПОСЛЕ close()
+        // (см. комментарий у поля). Сброс происходит в начале следующего open().
         data = null
-        lastSegmentDurationUs = 0
         transferEnded()
     }
 
