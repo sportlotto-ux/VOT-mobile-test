@@ -584,7 +584,7 @@ class SabrClient private constructor(
                         header.hasDurationMs() -> header.durationMs
                         header.hasTimeRange() && header.timeRange.hasDurationTicks() && header.timeRange.hasTimescale() && header.timeRange.timescale != 0 ->
                             header.timeRange.durationTicks * 1000L / header.timeRange.timescale
-                        header.hasStartMs() && liveMetadata != null -> 4900L // live estimate: 5s - tolerance, как в SmartTube
+                        header.hasStartMs() && liveMetadata != null -> 2000L // live estimate = реальный шаг эфира 2с (v9: 4900→2000, иначе очередь 5с vs шаг 2с → virtual buffer)
                         else -> 0L
                     }
                     val segment = Segment(
