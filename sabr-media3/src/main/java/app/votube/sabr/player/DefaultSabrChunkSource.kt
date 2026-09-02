@@ -90,6 +90,18 @@ class DefaultSabrChunkSource(
     private var lastTrackSwitchMs: Long = 0L
     private var lastSelectedTrackIndex: Int = C.INDEX_UNSET
 
+    // v8: гейт по остатку буфера (предложение пользователя: <18с — «тянуть сразу»,
+    // >28с — пауза деклараций). <18с — естественное состояние непрерывной загрузки
+    // (следующий запрос уходит сразу после завершения предыдущего), отдельный механизм
+    // не нужен. Пауза при >28с закрывает последний источник роста буфера: после v7
+    // серверный target readahead (28-37с) игнорируется, но собственного потолка у
+    // планировщика не было. Догон v6 (1.2x) сжигает излишек: при offset ~28с speed
+    // упирается в 1.2x, остаток тает ~0.2с/с, и к таргету 15с буфер возвращается в
+    // зону <18с (непрерывная загрузка). Фактический потолок = 28с + один шаг сегмента
+    // (аудио ~10с) — гранулярность декларации, дальше не растёт.
+    private val bufferAheadPauseMs = 28_000L
+    private var bufferGatePaused = false
+
     init {
         val representations =
             adaptationSetIndices.flatMap { manifest.adaptationSets[it].representations }
@@ -189,6 +201,38 @@ class DefaultSabrChunkSource(
         logReadaheadPolicy(bufferedDurationUs)
 
         val previousChunk = queue.lastOrNull()
+
+        // v8: пауза деклараций по остатку буфера. Гейт переоценивается на каждом
+        // getNextChunk, а media3 при простаивающем лоадере сам пере-поллит его раз в
+        // секунду (READY_MAXIMUM_INTERVAL_MS=1000) — таймер не нужен, состояние живёт
+        // на уровне буфера. Остаток = loadPositionUs − playback, т.е. ДЕКЛАРИРУЕМЫЙ
+        // конец очереди (включая чанки в полёте) — не даём передекларировать.
+        // Init-запросы и очередь после seek не блокируются: там буфер ~0, гейт открыт.
+        // VOD и загрузка файлов (isLive=false) не затронуты.
+        // Голова эфира при паузе продолжает быть точной без сетевого опроса:
+        // LiveMetadata приходит push с каждым ответом (при активной загрузке — каждые
+        // 2-5с = фактическая свежесть «опроса 2-3с»), а между ответами offset
+        // самостабилен (windowStartTime-якорь v6: эфир идёт 1:1 с настенными часами).
+        if (isLive && previousChunk != null
+            && bufferedDurationUs > Util.msToUs(bufferAheadPauseMs)) {
+            if (!bufferGatePaused) {
+                bufferGatePaused = true
+                android.util.Log.i(
+                    "SabrChunkSource",
+                    "buffer gate: PAUSE declarations, itag=${trackSelection.selectedFormat.id}, " +
+                        "aheadMs=${Util.usToMs(bufferedDurationUs)} > ${bufferAheadPauseMs}ms"
+                )
+            }
+            return
+        }
+        if (bufferGatePaused) {
+            bufferGatePaused = false
+            android.util.Log.i(
+                "SabrChunkSource",
+                "buffer gate: RESUME declarations, itag=${trackSelection.selectedFormat.id}, " +
+                    "aheadMs=${Util.usToMs(bufferedDurationUs)}"
+            )
+        }
 
         val chunkIterators = representationHolders.map {
             if (it.chunkIndex == null) MediaChunkIterator.EMPTY
