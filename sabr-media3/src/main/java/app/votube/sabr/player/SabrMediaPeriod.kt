@@ -139,9 +139,10 @@ class SabrMediaPeriod(
         sabrClient.lastActionMs = now
         android.util.Log.i(
             "SabrMediaPeriod",
+            // selections индексированы по рендерерам: [0]=video, [1]=audio
             "track selection changed: positionMs=${positionUs / 1000}, " +
-                "audio=${selections.getOrNull(0)?.selectedFormat?.id}, " +
-                "video=${selections.getOrNull(1)?.selectedFormat?.id}"
+                "video=${selections.getOrNull(0)?.selectedFormat?.id}, " +
+                "audio=${selections.getOrNull(1)?.selectedFormat?.id}"
         )
 
         val sampleStreamList: MutableList<ChunkSampleStream<SabrChunkSource?>> = mutableListOf()
