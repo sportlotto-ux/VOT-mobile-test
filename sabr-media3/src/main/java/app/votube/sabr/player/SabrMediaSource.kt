@@ -94,6 +94,26 @@ class SabrMediaSource(
     private var liveWindowDurationUs: Long = C.TIME_UNSET
     private var liveDefaultPositionUs: Long = 0L
 
+    /* Почему это критично: в media3 1.4.1 Window.isLive() = (liveConfiguration != null).
+       Окно без liveConfiguration для плеера НЕ live: не работает
+       DefaultLivePlaybackSpeedControl (плавный разгон к живому краю) и
+       getCurrentLiveOffset(). Итог — после любого микрофриза/зависания загрузки
+       (лог 14:48:28→14:49:00: 32с молчания UMP-чтения) позиция плеера навсегда
+       оставалась на 31-32с позади головы эфира — ничто её не подтягивало.
+       Теперь: targetOffset 15с (как в браузере), после ребуфера цель мягко
+       поднимается до maxOffset 20с (защита от шторма ребуферов на медленном
+       канале), разгон до 1.2x возвращает накопленную латентность (~30с за ~2.5 мин,
+       звук тянется Sonic без изменения тона). Плеер сам не трогает скорость,
+       если пользователь вручную выставил не-1x (условие playbackParameters.speed==1f). */
+    private val liveConfiguration: MediaItem.LiveConfiguration =
+        MediaItem.LiveConfiguration.Builder()
+            .setTargetOffsetMs(15000)
+            .setMinOffsetMs(12000)
+            .setMaxOffsetMs(20000)
+            .setMinPlaybackSpeed(1.0f)
+            .setMaxPlaybackSpeed(1.2f)
+            .build()
+
     @Synchronized
     override fun getMediaItem(): MediaItem {
         return mediaItem
@@ -180,14 +200,25 @@ class SabrMediaSource(
         // абсолютном домене us, а ОКНО смещено на windowStart (positionInFirstPeriodUs).
         // Тогда позиция плеера (периодная = абсолютная) − windowStart = позиция в окне 0..windowDuration.
         val windowStartUs = if (isLive) Util.msToUs(sabrClient.getLiveWindowStartMs() ?: 0L) else 0L
+        /* windowStartTimeMs = UNIX-время, соответствующее НАЧАЛУ окна (край окна = голова эфира,
+           поэтому начало окна = сейчас − окно). Без него ExoPlayerImplInternal.getLiveOffsetUs
+           возвращает TIME_UNSET и speed control не включается:
+           offset = (currentUnixTime − windowStartTimeMs) − (позиция − windowStart).
+           Между refresh'ами формула самостабильна: offset = (now−t0) + head@t0 − position,
+           а каждый refresh по свежему headTimeMs пересчитывает якорь заново. */
+        val windowStartTimeMs =
+            if (isLive && windowDuration != C.TIME_UNSET && windowDuration > 0)
+                System.currentTimeMillis() - Util.usToMs(windowDuration)
+            else C.TIME_UNSET
         val timeline =
             SabrTimeline(
                 C.TIME_UNSET,
-                C.TIME_UNSET,
+                windowStartTimeMs,
                 elapsedRealtimeOffsetMs,
                 windowStartUs,
                 windowDuration,
                 defaultPos,
+                liveConfiguration,
                 manifest,
                 mediaItem,
             )
@@ -227,6 +258,7 @@ class SabrMediaSource(
         private val offsetInFirstPeriodUs: Long,
         private val windowDurationUs: Long,
         private val windowDefaultStartPositionUs: Long,
+        private val liveConfiguration: MediaItem.LiveConfiguration?,
         private val manifest: SabrManifest,
         private val mediaItem: MediaItem?,
     ) : Timeline() {
@@ -255,6 +287,9 @@ class SabrMediaSource(
             // positionInFirstPeriodUs = windowStart: период живёт в абсолютном домене us
             // (сэмплы fMP4 абсолютны), окно — его срез [windowStart .. windowStart+duration].
             // isDynamic=true — live-окно растёт с головой; period UID стабилен, позиция сохраняется.
+            // 9-й параметр = liveConfiguration (был null): в media3 1.4.1 Window.isLive()
+            // возвращает liveConfiguration != null, а ExoPlayerImplInternal кормит им
+            // DefaultLivePlaybackSpeedControl (плавный разгон к живому краю после фризов).
             return window.set(
                 Window.SINGLE_WINDOW_UID,
                 mediaItem,
@@ -264,7 +299,7 @@ class SabrMediaSource(
                 elapsedRealtimeEpochOffsetMs,
                 true,
                 true,
-                null,
+                liveConfiguration,
                 windowDefaultStartPositionUs,
                 windowDurationUs,
                 0,

@@ -5,6 +5,7 @@ import android.os.SystemClock
 import android.util.Log
 import java.io.FilterInputStream
 import java.io.IOException
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 import androidx.annotation.OptIn
 import androidx.media3.common.MimeTypes
@@ -121,7 +122,17 @@ class SabrClient private constructor(
     private val initializedFormats = mutableMapOf<Int, InitializedFormat>()
     private val partialSegments = mutableMapOf<Int, Segment>()
     private val pendingSegments = mutableMapOf<Int, MutableList<Segment>>()
+    /* КЛОН общего клиента с readTimeout: одна UMP-загрузка идёт через общий канал
+       limitedParallelism(1), и зависшее чтение блокирует ВСЕ A/V запросы.
+       Лог 14:48:28→14:49:00: чтение сегмента молча висело 32с — буфер кончился,
+       playback встал, и латентность навсегда осталась 31-32с позади эфира.
+       readTimeout ограничивает ТОЛЬКО паузу между байтами (не весь стрим):
+       легитимный long-poll с типовым потоком данных проходит, мёртвое соединение
+       обрывается через 20с → Media3 перезапрашивает чанк по своей политике ретраев. */
     private val client: OkHttpClient = OkHttpManager.instance().getClient()
+        .newBuilder()
+        .readTimeout(20, TimeUnit.SECONDS)
+        .build()
     private var requestNumber = 1
     private var playbackCookie: PlaybackCookie? = null
     private var backoffTime: Int? = null
