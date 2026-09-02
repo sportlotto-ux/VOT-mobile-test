@@ -31,6 +31,7 @@ import video_streaming.MediaHeaderOuterClass.MediaHeader
 import video_streaming.LiveMetadataOuterClass.LiveMetadata
 import video_streaming.SabrSeekOuterClass.SabrSeek
 import video_streaming.NextRequestPolicyOuterClass.NextRequestPolicy
+import video_streaming.ReloadPlayerResponseOuterClass.ReloadPlaybackContext
 import video_streaming.PlaybackStartPolicyOuterClass.PlaybackStartPolicy
 import video_streaming.PlaybackCookieOuterClass.PlaybackCookie
 import video_streaming.SabrContextSendingPolicyOuterClass.SabrContextSendingPolicy
@@ -171,6 +172,10 @@ class SabrClient private constructor(
     private fun <T> withState(block: () -> T): T = synchronized(stateLock, block)
     /** last use timestamp per itag — to avoid churn when ABR oscillates (keep recent formats) */
     private val lastFormatUseMs = mutableMapOf<Int, Long>()
+    /** Последний принятый сегмент по itag (без init) — для узких bufferedRanges.
+     *  Референс googlevideo докладывает серверу только последний кусок, а не всю очередь:
+     *  иначе в ответ валятся пачки по 6 сегментов/4МБ и рвут якоря. */
+    private val lastReceivedByItag = mutableMapOf<Int, Segment>()
     /** флаг что live уже стартовал с головы — нужен чтобы отличить начальный edge от DVR rewind к началу */
     var hasStartedLive: Boolean = false
     private var lastRequestMs: Long? = null
@@ -376,6 +381,30 @@ class SabrClient private constructor(
         value?.takeIf { it >= 0 }
     }
 
+    /** Только текущие треки (как у референса googlevideo/SabrStreamingAdapter).
+     *  Отвалившиеся itag серверу не предлагаем — иначе он досыпает за них пачками
+     *  (лог: newSegs=6 по 4.4МБ) и рвёт временные якоря. До первой инициализации —
+     *  пусто, только preferred (как у референса). Вызывать под локом. */
+    private fun currentSelectedIds(): List<FormatId> =
+        if (initializedFormats.isNotEmpty()) {
+            listOfNotNull(audioFormat?.formatId(), videoFormat?.formatId())
+        } else emptyList()
+
+    /** Узкие bufferedRanges: по последнему принятому сегменту текущих треков
+     *  (как у референса). Полную очередь не докладываем — сервер и так знает голову.
+     *  Вызывать под локом. */
+    private fun buildNarrowBufferedRanges(): List<BufferedRange> {
+        val currentItags = listOfNotNull(audioFormat?.streamInfo?.itag, videoFormat?.streamInfo?.itag)
+        return currentItags.mapNotNull { itag ->
+            val seg = lastReceivedByItag[itag] ?: return@mapNotNull null
+            val formatId = initializedFormats[itag]?.id ?: return@mapNotNull null
+            BufferedRange.newBuilder().setFormatId(formatId).setStartTimeMs(seg.header.startMs)
+                .setDurationMs(seg.duration)
+                .setStartSegmentIndex(seg.sequenceNumber.toInt())
+                .setEndSegmentIndex(seg.sequenceNumber.toInt()).build()
+        }
+    }
+
     fun getNextSegment(playbackRequest: PlaybackRequest): Segment? {
         fatalError?.let { throw IOException("SABR error: ${it.type}") }
         val itag = playbackRequest.format.itag
@@ -554,8 +583,8 @@ class SabrClient private constructor(
                 .setPlayerTimeMs(playbackRequest.segmentStartTimeMs).setVideoPlaybackUstreamerConfig(ustreamerConfig)
                 .addAllPreferredAudioFormatIds(listOfNotNull(audioFormat?.formatId()))
                 .addAllPreferredVideoFormatIds(listOfNotNull(videoFormat?.formatId()))
-                .addAllSelectedFormatIds(initializedFormats.values.map { it.id })
-                .addAllBufferedRanges(initializedFormats.values.flatMap { it.buildBufferedRanges() })
+                .addAllSelectedFormatIds(currentSelectedIds())
+                .addAllBufferedRanges(buildNarrowBufferedRanges())
                 .setStreamerContext(StreamerContext.newBuilder().setPoToken(poToken ?: ByteString.empty())
                     .setClientInfo(StreamerContext.ClientInfo.newBuilder().setClientName(101).setClientVersion("1.02")
                         .setDeviceMake("Apple").setDeviceModel("RealityDevice14,1").setOsName("visionOS")
@@ -630,6 +659,16 @@ class SabrClient private constructor(
                     val parser = UmpParser(part.data)
                     val id = parser.readVarint()?.toInt() ?: return@withState
                     val segment = partialSegments.remove(id) ?: return@withState
+                    // Валидация как у референса googlevideo: оборванный long-poll даёт кусок
+                    // короче заявленного content_length — такой в экстрактор нельзя (фриз),
+                    // дропаем, доберём следующим запросом с бэкоффом.
+                    if (segment.header.hasContentLength() && segment.header.contentLength > 0 &&
+                        segment.length().toLong() != segment.header.contentLength) {
+                        Log.w(TAG, "media segment content-length mismatch: itag=${segment.header.itag}, " +
+                            "sequence=${segment.sequenceNumber}, expected=${segment.header.contentLength}, " +
+                            "got=${segment.length()} — dropped")
+                        return@withState
+                    }
                     val format = initializedFormats[segment.header.itag]
                     if (format == null) {
                         pendingSegments.getOrPut(segment.header.itag) { mutableListOf() }.add(segment)
@@ -728,6 +767,23 @@ class SabrClient private constructor(
                         Log.i(TAG, "stream protection: status=${s.status}")
                     } catch (e: Exception) { Log.w(TAG, "failed to parse STREAM_PROTECTION_STATUS: $e") }
                 }
+                UMPPartId.RELOAD_PLAYER_RESPONSE -> {
+                    // Как у референса googlevideo — сервер инвалидировал сессию: сбрасываем
+                    // handshake (cookie/контексты), медиакэш оставляем. Иначе молотим в мёртвую
+                    // сессию и получаем пустые ответы → фриз.
+                    try {
+                        val reload = ReloadPlaybackContext.parseFrom(part.data)
+                        val token = reload.takeIf { it.hasReloadPlaybackParams() }
+                            ?.reloadPlaybackParams?.takeIf { it.hasToken() }?.token
+                        playbackCookie = null
+                        sabrContexts.clear()
+                        activeSabrContexts.clear()
+                        Log.e(TAG, "reload player response: session reset, token=${token ?: "none"}")
+                    } catch (e: Exception) { Log.w(TAG, "failed to parse RELOAD_PLAYER_RESPONSE: $e") }
+                }
+                UMPPartId.SNACKBAR_MESSAGE -> {
+                    Log.i(TAG, "snackbar message received, size=${part.data.size}")
+                }
                 else -> Log.w(TAG, "Unhandled UMP part: ${part.type} size=${part.data.size}")
             }
         }
@@ -738,6 +794,7 @@ class SabrClient private constructor(
     private fun storeSegment(format: InitializedFormat, segment: Segment) {
         format.downloadedSegments[segment.sequenceNumber] = segment
         mediaStoredCounter++
+        if (!segment.header.isInitSeg) lastReceivedByItag[segment.header.itag] = segment
         if (segment.header.isInitSeg) format.initSegment = segment
         lastFormatUseMs[segment.header.itag] = SystemClock.elapsedRealtime()
         Log.i(TAG, "media segment stored: itag=${segment.header.itag}, " +
@@ -764,8 +821,10 @@ class SabrClient private constructor(
          *  Было 30_000: фолбэк молча отдавал чанк до 30с не от запрошенного места → рассинхрон.
          *  Было 12_500: кэш-матч подхватывал сегмент на 11с вперёд от запрошенного (лог 12:36:56:
          *  seq=7875 startMs=15749607 для requested 15738509) → пропуск контента и разрыв очереди.
-         *  6с покрывает следующий префетч-сегмент и не даёт больших прыжков. */
-        private const val LIVE_TIME_TOLERANCE_MS = 6_000L
+         *  Было 6_000: отдавал на 5с вперёд (лог 22:24:04: seq=1002 startMs=5008400 для
+         *  requested 5003400) → видимый скачок. 3с покрывает следующий префетч-сегмент
+         *  (ритм эфира 2с + джиттер) и не даёт больших прыжков. */
+        private const val LIVE_TIME_TOLERANCE_MS = 3_000L
         /** допустимый сдвиг НАЗАД от запрошенного времени (мс) — только дрожание границ при
          *  перенумерации сервера. Всё, что старее — повтор уже проигранного чанка (запрещено). */
         private const val SAME_TIME_EPS_MS = 1_500L
