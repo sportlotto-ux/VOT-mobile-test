@@ -177,7 +177,19 @@ class DefaultSabrChunkSource(
         if (fatalError != null) {
             return false
         }
-        return trackSelection.shouldCancelChunkLoad(playbackPositionUs, loadingChunk, queue)
+        val cancel = trackSelection.shouldCancelChunkLoad(playbackPositionUs, loadingChunk, queue)
+        if (cancel && isLive) {
+            // Live SABR: отмена почти докачанного чанка (3-6МБ) = выброшенные мегабайты +
+            // сброс очереди (resume@0) + догон-пачка. Дешевле докачать: следующий чанк и так
+            // возьмём в новом качестве. Seek отменяет загрузки иначе (напрямую), его не трогаем.
+            val req = loadingChunk.dataSpec.customData as? PlaybackRequest
+            android.util.Log.w(
+                "SabrChunkSource",
+                "ABR cancel suppressed (live): itag=${req?.format?.itag}, seq=${req?.segment}"
+            )
+            return false
+        }
+        return cancel
     }
 
     override fun getNextChunk(
@@ -295,8 +307,18 @@ class DefaultSabrChunkSource(
         val heightDowngrade = beforeFormat.height > 0 && afterFormat.height > 0 &&
             afterFormat.height < beforeFormat.height
         val isDowngrade = afterIndex != beforeIndex && (bitrateDowngrade || heightDowngrade)
+        val bitrateUpgrade = beforeFormat.bitrate > 0 && afterFormat.bitrate > 0 &&
+            afterFormat.bitrate > beforeFormat.bitrate
+        val heightUpgrade = beforeFormat.height > 0 && afterFormat.height > 0 &&
+            afterFormat.height > beforeFormat.height
+        val isUpgrade = afterIndex != beforeIndex && (bitrateUpgrade || heightUpgrade)
         val hasBufferOrQueue = bufferedMs > 500 || queue.isNotEmpty()
         val shouldSuppressDowngrade = isLive && isDowngrade && isRecentlySwitched && hasBufferOrQueue
+        // Зеркало даунгрейд-гистерезиса: на тонком буфере (<8с) в устоявшемся режиме не
+        // разгоняемся — fetch ~ равен битрейту линка (куски 4-6МБ по 2.5-3.8с), апгрейд
+        // кончается отменой докачки (InterruptedException) и сбросом очереди.
+        // Стартовый разгон не трогаем (пустая очередь — можно).
+        val shouldSuppressUpgrade = isLive && isUpgrade && bufferedMs < 8_000 && queue.isNotEmpty()
         if (shouldSuppressDowngrade) {
             android.util.Log.i(
                 "SabrChunkSource",
@@ -305,6 +327,13 @@ class DefaultSabrChunkSource(
             )
             // Для текущего чанка используем старый holder (высокое качество), селектор остаётся на низком:
             // следующий getNextChunk снова предложит даунгрейд и снова подавит — окно 10с от последнего свитча.
+            representationHolder = representationHolders[beforeIndex]
+        } else if (shouldSuppressUpgrade) {
+            android.util.Log.i(
+                "SabrChunkSource",
+                "ABR hysteresis: suppress upgrade $beforeIndex -> $afterIndex " +
+                    "(thin buffer ${bufferedMs}ms, queue=${queue.size})"
+            )
             representationHolder = representationHolders[beforeIndex]
         } else {
             if (afterIndex != beforeIndex) {
