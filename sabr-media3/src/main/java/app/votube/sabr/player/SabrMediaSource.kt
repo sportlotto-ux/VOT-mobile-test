@@ -176,12 +176,16 @@ class SabrMediaSource(
         val isLive = manifest.durationMs == C.TIME_UNSET
         val windowDuration = if (isLive && liveWindowDurationUs != C.TIME_UNSET) liveWindowDurationUs else Util.msToUs(manifest.durationMs)
         val defaultPos = if (isLive && liveDefaultPositionUs != 0L) liveDefaultPositionUs else 0L
+        // ДОМЕН ВРЕМЕНИ: сэмплы fMP4 несут абсолютное медиа-время эфира, поэтому период живёт в
+        // абсолютном домене us, а ОКНО смещено на windowStart (positionInFirstPeriodUs).
+        // Тогда позиция плеера (периодная = абсолютная) − windowStart = позиция в окне 0..windowDuration.
+        val windowStartUs = if (isLive) Util.msToUs(sabrClient.getLiveWindowStartMs() ?: 0L) else 0L
         val timeline =
             SabrTimeline(
                 C.TIME_UNSET,
                 C.TIME_UNSET,
                 elapsedRealtimeOffsetMs,
-                0,
+                windowStartUs,
                 windowDuration,
                 defaultPos,
                 manifest,
@@ -195,6 +199,8 @@ class SabrMediaSource(
         // windowStart фиксируется SabrClient на первом LiveMetadata — домен времени чанков
         // (windowPos = time − windowStart) совпадает с доменом таймлайна и не плывёт вместе
         // со скользящим minSeekable (иначе позиции в периоде прыгают → фризы/скачки).
+        // Окно РАСТЁТ от фиксированного старта — это нормально: period UID стабилен,
+        // ExoPlayer сохраняет позицию при refreshSourceInfo, загрузка продолжается от очереди.
         val headTimeMs = if (meta.hasHeadTimeMs()) meta.headTimeMs else 0L
         val minSeekMs = if (meta.hasMinSeekableTimeTicks() && meta.hasMinSeekableTimescale() && meta.minSeekableTimescale != 0)
             meta.minSeekableTimeTicks * 1000L / meta.minSeekableTimescale else 0L
@@ -246,6 +252,9 @@ class SabrMediaSource(
             defaultPositionProjectionUs: Long,
         ): Window {
             Assertions.checkIndex(windowIndex, 0, 1)
+            // positionInFirstPeriodUs = windowStart: период живёт в абсолютном домене us
+            // (сэмплы fMP4 абсолютны), окно — его срез [windowStart .. windowStart+duration].
+            // isDynamic=true — live-окно растёт с головой; period UID стабилен, позиция сохраняется.
             return window.set(
                 Window.SINGLE_WINDOW_UID,
                 mediaItem,
@@ -254,12 +263,12 @@ class SabrMediaSource(
                 windowStartTimeMs,
                 elapsedRealtimeEpochOffsetMs,
                 true,
-                false,
+                true,
                 null,
                 windowDefaultStartPositionUs,
                 windowDurationUs,
                 0,
-                periodCount - 1,
+                0,
                 offsetInFirstPeriodUs
             )
         }

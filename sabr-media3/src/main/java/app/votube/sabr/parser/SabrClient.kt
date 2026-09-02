@@ -259,13 +259,28 @@ class SabrClient private constructor(
         }
     }
 
-    /** Ближайший по времени сегмент из кэша формата (в пределах tolerance) или null.
-     *  Сервер выбирает чанк по playerTimeMs и может прислать другой sequence — тайм-матч
-     *  надёжнее строгого равенства номеров. */
-    private fun findTimeMatch(format: InitializedFormat?, requestedTimeMs: Long): Segment? {
+    /** Ближайший ПО ВРЕМЕНИ ВПЕРЁД сегмент из кэша формата или null.
+     *  Разрешены: тот же момент (сервер перенумеровал чанк, |startMs − requested| ≤ SAME_TIME_EPS_MS)
+     *  и вперёд до LIVE_TIME_TOLERANCE_MS (следующий сегмент из префетча). Назад дальше eps — НЕЛЬЗЯ:
+     *  повтор старого чанка зацикливает загрузку (лог 10:32: re-serve seq 2258110/2258112/2258113
+     *  на 5с позади запроса каждые ~1с → фриз + звук в цикл). Уже отданный сегмент для этого itag
+     *  исключается — он не должен быть отдан дважды. */
+    private fun findTimeMatch(format: InitializedFormat?, requestedTimeMs: Long, itag: Int): Segment? {
         val cached = format?.downloadedSegments?.values ?: return null
-        val byTime = cached.minByOrNull { kotlin.math.abs(it.header.startMs - requestedTimeMs) } ?: return null
-        return byTime.takeIf { kotlin.math.abs(it.header.startMs - requestedTimeMs) <= LIVE_TIME_TOLERANCE_MS }
+        val lastServedSeq = lastReturnedSequenceByItag[itag]
+        return cached.filter {
+            it.sequenceNumber != lastServedSeq &&
+                it.header.startMs >= requestedTimeMs - SAME_TIME_EPS_MS &&
+                it.header.startMs <= requestedTimeMs + LIVE_TIME_TOLERANCE_MS
+        }.minByOrNull { it.header.startMs }
+    }
+
+    /** Какой сегмент будет отдан для (itag, segment, requestedTimeMs): точный по sequence или
+     *  forward тайм-матч. ChunkSource использует startMs как ДЕКЛАРИРОВАННОЕ время чанка, чтобы
+     *  очередь совпадала с реальными сэмплами fMP4 (абсолютное медиа-время). */
+    fun peekServedStartMs(itag: Int, segment: Long, requestedTimeMs: Long): Long? = withState {
+        val f = initializedFormats[itag]
+        (f?.getSegment(segment) ?: findTimeMatch(f, requestedTimeMs, itag))?.header?.startMs
     }
 
     /** Returns the server's current target readahead for the selected track type, if present. */
@@ -307,7 +322,7 @@ class SabrClient private constructor(
                 // раундтрипы, каждый из которых крадёт полосу и даёт фризы (см. лог 20:20:2x:
                 // каждый сегмент шёл через 2-3 запроса «requested N not found»).
                 if (liveMetadata != null && format?.hasSegment(playbackRequest.segment) != true) {
-                    val cached = withState { findTimeMatch(format, playbackRequest.segmentStartTimeMs) }
+                    val cached = withState { findTimeMatch(format, playbackRequest.segmentStartTimeMs, itag) }
                     if (cached != null) {
                         val served = withState { format!!.getSegment(cached.sequenceNumber) }
                         if (served != null) {
@@ -347,7 +362,7 @@ class SabrClient private constructor(
                     // Тайм-матч сразу после ответа: сервер уже вернул сегмент, покрывающий запрошенное
                     // время — не делаем ещё 2 попытки в поисках точного sequence (каждая — новый HTTP-запрос).
                     if (liveMetadata != null) {
-                        val timeMatch = withState { findTimeMatch(format, playbackRequest.segmentStartTimeMs) }
+                        val timeMatch = withState { findTimeMatch(format, playbackRequest.segmentStartTimeMs, itag) }
                         if (timeMatch != null) {
                             val served = withState { format!!.getSegment(timeMatch.sequenceNumber) }
                             if (served != null) {
@@ -375,7 +390,7 @@ class SabrClient private constructor(
                             var seg: Segment? = fallbackFormat.getSegment(requestedSeq)
                             // 2) По времени: сервер вернул другой sequence, но чанк покрывает запрошенное время
                             if (seg == null) {
-                                val byTime = findTimeMatch(fallbackFormat, requestedTime)
+                                val byTime = findTimeMatch(fallbackFormat, requestedTime, itag)
                                 if (byTime != null) {
                                     seg = fallbackFormat.getSegment(byTime.sequenceNumber)
                                     if (seg != null) {
@@ -383,9 +398,13 @@ class SabrClient private constructor(
                                     }
                                 }
                             }
-                            // 3) Последний шанс — ближайший к голове (live edge / reconnect в середине эфира)
+                            // 3) Последний шанс — ближайший к голове (live edge / reconnect в середине эфира).
+                            //    Уже отданный sequence исключаем — иначе отдадим тот же чанк повторно.
                             if (seg == null && headSeq != null) {
-                                val nearestHead = fallbackFormat.downloadedSegments.keys.minByOrNull { kotlin.math.abs(it - headSeq) }
+                                val lastServedSeq = lastReturnedSequenceByItag[itag]
+                                val nearestHead = fallbackFormat.downloadedSegments.keys
+                                    .filter { it != lastServedSeq }
+                                    .minByOrNull { kotlin.math.abs(it - headSeq) }
                                 if (nearestHead != null) {
                                     seg = fallbackFormat.getSegment(nearestHead)
                                     if (seg != null) {
@@ -632,5 +651,8 @@ class SabrClient private constructor(
         /** максимальное расхождение по времени (мс) для тайм-матча — около 2.5 live-сегментов.
          *  Было 30_000: фолбэк молча отдавал чанк до 30с не от запрошенного места → рассинхрон. */
         private const val LIVE_TIME_TOLERANCE_MS = 12_500L
+        /** допустимый сдвиг НАЗАД от запрошенного времени (мс) — только дрожание границ при
+         *  перенумерации сервера. Всё, что старее — повтор уже проигранного чанка (запрещено). */
+        private const val SAME_TIME_EPS_MS = 1_500L
     }
 }

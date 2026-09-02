@@ -316,11 +316,26 @@ class DefaultSabrChunkSource(
                 val headSeq = sabrClient.getLiveHeadSequenceNumber()
                 val headTimeMs = sabrClient.getLiveHeadTimeMs()
                 val minSeekMs = sabrClient.getMinSeekableTimeMs()
+                // ДОМЕН ВРЕМЕНИ: сэмплы fMP4 несут АБСОЛЮТНОЕ медиа-время эфира (tfdt ≈ 1.13e10 мс),
+                // поэтому период/очередь/загрузка живут в абсолютном домене us. Таймлайн-окно
+                // смещено на windowStart (positionInFirstPeriodUs) — см. SabrMediaSource.
+                // loadPosition может быть ещё в относительном домене (0..windowDuration) до первой
+                // пересборки окна — нормализуем: относительное всегда << windowStart.
+                val windowStartMs0 = sabrClient.getLiveWindowStartMs()
+                val loadMsRaw = Util.usToMs(loadPositionUs)
+                val loadAbsMs = if (windowStartMs0 != null && loadMsRaw < windowStartMs0) windowStartMs0 + loadMsRaw else loadMsRaw
+                val loadRelMs = windowStartMs0?.let { loadAbsMs - it } ?: loadMsRaw
                 // Слушаем голову эфира: для live edge берём headSeq, для DVR rewind — проверяем пройденное время
                 // SABR_SEEK обрабатываем только на seek/initial (когда queue пуст), иначе последовательные сегменты идут по порядку
                 if (previousChunk == null) {
+                    // Без LiveMetadata сервер отдаст «слепую» позицию 0 — ждём метаданные
+                    // (приходят с ответом на init-запрос вместе с префетчем первых сегментов).
+                    if (headSeq == null) {
+                        android.util.Log.i("SabrChunkSource", "live pre-metadata: itag=${representationHolder.representation.streamInfo.itag} — wait for LiveMetadata before media request")
+                        return
+                    }
                     val rawSeek = sabrClient.peekServerSeekMs()
-                    val targetMs = Util.usToMs(loadPositionUs)
+                    val targetMs = loadRelMs
                     val headIsBig = (headTimeMs ?: 0L) > 60_000
                     // Нулевой SABR_SEEK в середине большого live — мусор (init-позиция сервера), а не реальная
                     // команда перемотки. Иначе он перебивает реальную позицию (запуск/переключение трека/реконнект)
@@ -329,7 +344,7 @@ class DefaultSabrChunkSource(
                     // initial edge — любой первый запрос трека (previousChunk==null) с маленьким target и большой головой
                     // должен идти к head-15с. Глобальный hasStartedLive ломал второй трек (аудио/видео): первый трек уже выставлял
                     // hasStartedLive=true, второй с previousChunk==null попадал в DVR mapping 0 → segment 0/7417 вместо головы.
-                    val isInitialEdge = headSeq != null && headSeq > 100 && targetMs < 1000 && headIsBig
+                    val isInitialEdge = headSeq != null && headSeq > 100 && loadRelMs < 1000 && headIsBig
                     // Причина проблемы pXBfmgk9lSU: сервер после init шлёт seek=0 (начало), а голова 1153 (2300с) —
                     // если слушаем seek=0, просим середину (692) вместо края, получаем 1,2,3 и петлю no segment 693.
                     // Для live edge игнорируем seek=0 и берём голову.
@@ -355,17 +370,17 @@ class DefaultSabrChunkSource(
                         android.util.Log.i("SabrChunkSource", "live serverSeek (initial/seek): seekMs=$serverSeekMs headSeq=$headSeq headTimeMs=$headTimeMs -> segmentNum=$segmentNum requestedTimeMs=$requestedTimeMs")
                     } else {
                         sabrClient.consumeServerSeekMs() // чистим мусорный seek 0, идём по реальной позиции
-                        // DVR/continuation: целевое время = windowStart + loadPosition, где windowStart
-                        // зафиксирован на первом LiveMetadata (не скользит вместе с окном — иначе
-                        // startTime старых и новых чанков разъедутся).
+                        // DVR/continuation: loadPosition УЖЕ в абсолютном домене периода (сэмплы fMP4
+                        // абсолютны, окно смещено на windowStart) — просто клампим в окно.
+                        // Нормализация выше переводит ранний относительный период в абсолютный,
+                        // поэтому windowStart+target НЕ нужен (был бы двойной сдвиг).
                         // A/V-подгонку по sequence УБРАЛИ: серии sequence у аудио/видео разные (в логе
                         // одно и то же время = video 4567, audio 4570), прыжок к «чужому» номеру давал
                         // requestedTime на 60с в прошлом (4511166 вместо 4571166) и вечный fallback.
                         if (headSeq != null && headTimeMs != null) {
-                            val windowStartMs = sabrClient.getLiveWindowStartMs() ?: (minSeekMs ?: 0L)
-                            val absoluteTimeMs = windowStartMs + targetMs
+                            val windowStartMs = windowStartMs0 ?: (minSeekMs ?: 0L)
                             // Проверяем что абсолютное время внутри окна
-                            val clampedAbsolute = absoluteTimeMs.coerceIn(windowStartMs, headTimeMs)
+                            val clampedAbsolute = loadAbsMs.coerceIn(windowStartMs, headTimeMs)
                             requestedTimeMs = clampedAbsolute
                             val estDurationMs = if (representationHolder.lastSegmentDurationUs > 0) representationHolder.lastSegmentDurationUs / 1000 else 5000L
                             val offsetFromHeadMs = headTimeMs - clampedAbsolute
@@ -455,13 +470,18 @@ class DefaultSabrChunkSource(
                 myNextMs < playerMs - 4000
             } else false
             val startTimeUs = if (isLive) {
+                // Живём в АБСОЛЮТНОМ домене (сэмплы fMP4 = медиа-время эфира): начало чанка =
+                // реально отданный startMs (peek — чтобы декларируемое время очереди совпало с
+                // сэмплами, иначе buffered/readahead уплывает на величину клампа сервера),
+                // для initial/прыжка — запрошенное время; для последовательного — конец предыдущего чанка.
                 if (previousChunk != null && !jumpedForSyncLocal) previousChunk.endTimeUs
                 else {
-                    val windowStartMs = sabrClient.getLiveWindowStartMs() ?: (sabrClient.getMinSeekableTimeMs() ?: 0L)
-                    val windowDurationMs = sabrClient.getLiveWindowDurationMs()
-                    val rawWindowPosMs = requestedTimeMs - windowStartMs
-                    val windowPosMs = if (windowDurationMs != null && windowDurationMs > 0) rawWindowPosMs.coerceIn(0L, windowDurationMs) else rawWindowPosMs.coerceAtLeast(0L)
-                    Util.msToUs(windowPosMs)
+                    val declaredStartMs = sabrClient.peekServedStartMs(
+                        representationHolder.representation.streamInfo.itag,
+                        segmentNum + 1,
+                        requestedTimeMs,
+                    ) ?: requestedTimeMs
+                    Util.msToUs(declaredStartMs)
                 }
             } else previousChunk?.endTimeUs ?: loadPositionUs
             if (!isLive && startTimeUs >= representationHolder.periodDurationUs) {
