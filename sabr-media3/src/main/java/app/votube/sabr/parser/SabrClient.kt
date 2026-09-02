@@ -174,6 +174,11 @@ class SabrClient private constructor(
     /** флаг что live уже стартовал с головы — нужен чтобы отличить начальный edge от DVR rewind к началу */
     var hasStartedLive: Boolean = false
     private var lastRequestMs: Long? = null
+    /** Момент последнего пустого media-ответа (0 новых сегментов): следующие запросы
+     *  тормозим EMPTY_BACKOFF_MS, иначе спин 169Б по 8 req/s (лог 22:02:23, 22:04:57). */
+    private var lastMediaEmptyMs: Long = 0L
+    /** Счётчик новых сегментов в текущем media() — сбрасывается в начале вызова. */
+    private var mediaStoredCounter: Int = 0
     var lastManualFormatSelectionMs: Long? = null
     var lastActionMs: Long? = null
     /** Latest server playback-start policy, used by the player to choose readahead targets. */
@@ -400,7 +405,15 @@ class SabrClient private constructor(
                 }
                 repeat(if (liveMetadata != null) LIVE_REQUEST_RETRIES else 1) { attempt ->
                     if (format?.hasSegment(playbackRequest.segment) != true) {
-                        if (attempt > 0) delay(LIVE_RETRY_DELAY_MS)
+                        if (attempt > 0) {
+                            // После пустого ответа ждём дольше: следующий кусок ещё не готов.
+                            val sinceEmpty = SystemClock.elapsedRealtime() - lastMediaEmptyMs
+                            if (lastMediaEmptyMs > 0 && sinceEmpty < EMPTY_BACKOFF_MS) {
+                                delay(EMPTY_BACKOFF_MS - sinceEmpty)
+                            } else {
+                                delay(LIVE_RETRY_DELAY_MS)
+                            }
+                        }
                         Log.i(TAG, "media request: attempt=$attempt, itag=$itag, segment=${playbackRequest.segment}, playerTimeMs=${playbackRequest.segmentStartTimeMs}")
                         media(playbackRequest)
                         // Retain selected + any format that still holds data or was used recently (30s)
@@ -505,6 +518,13 @@ class SabrClient private constructor(
 
     private suspend fun media(playbackRequest: PlaybackRequest) {
         backoffTime?.let { delay(it.toLong()); backoffTime = null }
+        // Межвызовный троттл после пустого ответа: два трека (аудио+видео) идут через один
+        // dispatcher, без паузы они долбят сервер по очереди каждые ~100мс.
+        val sinceEmpty0 = SystemClock.elapsedRealtime() - lastMediaEmptyMs
+        if (lastMediaEmptyMs > 0 && sinceEmpty0 < EMPTY_BACKOFF_MS) {
+            delay(EMPTY_BACKOFF_MS - sinceEmpty0)
+        }
+        mediaStoredCounter = 0
         val now = SystemClock.elapsedRealtime()
         // Снимок состояния под локом: формат/контексты мутируются из других loader-потоков
         val abr = withState {
@@ -570,7 +590,10 @@ class SabrClient private constructor(
                 processPart(part)
             }
         }
-        Log.i(TAG, "media roundtrip: bytes=${networkBytesCounter.get() - networkBytesBefore}, ms=${SystemClock.elapsedRealtime() - roundtripStartMs}")
+        Log.i(TAG, "media roundtrip: bytes=${networkBytesCounter.get() - networkBytesBefore}, ms=${SystemClock.elapsedRealtime() - roundtripStartMs}, newSegs=$mediaStoredCounter")
+        if (mediaStoredCounter == 0) {
+            lastMediaEmptyMs = SystemClock.elapsedRealtime()
+        }
     }
 
     private fun processPart(part: Part) {
@@ -714,6 +737,7 @@ class SabrClient private constructor(
 
     private fun storeSegment(format: InitializedFormat, segment: Segment) {
         format.downloadedSegments[segment.sequenceNumber] = segment
+        mediaStoredCounter++
         if (segment.header.isInitSeg) format.initSegment = segment
         lastFormatUseMs[segment.header.itag] = SystemClock.elapsedRealtime()
         Log.i(TAG, "media segment stored: itag=${segment.header.itag}, " +
@@ -732,6 +756,10 @@ class SabrClient private constructor(
         private const val YOUTUBE_FRONTEND_URL = "https://www.youtube.com"
         private const val LIVE_REQUEST_RETRIES = 3
         private const val LIVE_RETRY_DELAY_MS = 250L
+        /** Пауза после пустого ответа (без новых сегментов): сервер ещё не сгенерил
+         *  следующий 2с-кусок, долбить его каждые 250мс бессмысленно — ждём ~половину
+         *  ритма эфира. См. шторм 169Б в логе 22:04:57 (10 запросов за 1.3с). */
+        private const val EMPTY_BACKOFF_MS = 900L
         /** максимальное расхождение по времени (мс) для тайм-матча вперёд — ~1.5 live-сегмента.
          *  Было 30_000: фолбэк молча отдавал чанк до 30с не от запрошенного места → рассинхрон.
          *  Было 12_500: кэш-матч подхватывал сегмент на 11с вперёд от запрошенного (лог 12:36:56:

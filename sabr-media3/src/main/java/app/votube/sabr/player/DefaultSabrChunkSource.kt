@@ -90,13 +90,17 @@ class DefaultSabrChunkSource(
     private var lastTrackSwitchMs: Long = 0L
     private var lastSelectedTrackIndex: Int = C.INDEX_UNSET
 
-    // v9: гейт по остатку буфера 15-30с (предложение пользователя: держать 15-30с,
+    // v9: гейт по остатку буфера (предложение пользователя: держать 15-30с,
     // подтаскивать каждые 5-7с по остатку, всегда знать голову эфира). <15с — тянуть
     // сразу (естественное состояние конвейера), >30с — пауза деклараций. После v8
     // 28с был потолком, теперь 30с + шаг сегмента (аудио ~10с) — гранулярность.
     // Догон v6 1.2x сжигает излишек 30с→15с за ~75с (0.2с/с). Опрос головы — push
     // LiveMetadata каждые 2-5с + windowStartTime-якорь самостабилен 1:1 с часами.
+    // v10: жёсткие 30с мёртвые — серверный target 15-18с, а фактический буфер 4-6с;
+    // лоадер поллил даже при 11с (лог 22:04:57, readahead=11753) и упирался в пустые
+    // 169Б. Пауза теперь динамическая: target+3с, жёсткий потолок 30с — страховка.
     private val bufferAheadPauseMs = 30_000L
+    private val bufferGateMarginMs = 3_000L
     private var bufferGatePaused = false
 
     init {
@@ -210,14 +214,24 @@ class DefaultSabrChunkSource(
         // LiveMetadata приходит push с каждым ответом (при активной загрузке — каждые
         // 2-5с = фактическая свежесть «опроса 2-3с»), а между ответами offset
         // самостабилен (windowStartTime-якорь v6: эфир идёт 1:1 с настенными часами).
-        if (isLive && previousChunk != null
-            && bufferedDurationUs > Util.msToUs(bufferAheadPauseMs)) {
+        // v10: порог динамический — серверный target (15-18с) + 3с, потолок 30с.
+        // Фикс: раньше только 30с, лоадер при буфере 11с продолжал поллить будущее
+        // за головой и получал пустые 169Б штормом (лог 22:04:57).
+        val bufferedMsForGate = Util.usToMs(bufferedDurationUs)
+        val serverTargetForGate = sabrClient.getTargetReadaheadMs(
+            representationHolders[trackSelection.selectedIndex].representation
+        )
+        val gateThresholdMs = minOf(
+            (serverTargetForGate ?: 15_000) + bufferGateMarginMs,
+            bufferAheadPauseMs
+        )
+        if (isLive && previousChunk != null && bufferedMsForGate > gateThresholdMs) {
             if (!bufferGatePaused) {
                 bufferGatePaused = true
                 android.util.Log.i(
                     "SabrChunkSource",
                     "buffer gate: PAUSE declarations, itag=${trackSelection.selectedFormat.id}, " +
-                        "aheadMs=${Util.usToMs(bufferedDurationUs)} > ${bufferAheadPauseMs}ms"
+                        "aheadMs=${Util.usToMs(bufferedDurationUs)} > ${gateThresholdMs}ms (target=$serverTargetForGate)"
                 )
             }
             return
@@ -537,6 +551,22 @@ class DefaultSabrChunkSource(
                         }
                         jumpedForSync = true
                         android.util.Log.w("SabrChunkSource", "live catch-up: itag=$currentItag requested $requestedTimeMs was behind playback $playerTimeMs/queue $loadAbsMs (declaredEnd=$declaredEndMs) -> jump (segmentNum=$segmentNum)")
+                    }
+                    // v10: не просим будущее за головой. Запрос segmentNum+1 > headSeq сервер
+                    // ещё не сгенерил — отвечает пустым 169Б сразу, а лоадер тут же ретраит
+                    // (шторм 10 запросов за 1.3с, лог 22:04:57). Если куска нет в префетче —
+                    // выходим без чанка: media3 пере-поллит getNextChunk через ~1с, к тому
+                    // времени голова продвинется. Кэш проверяем недеструктивным peek'ом.
+                    if (headSeq != null && segmentNum + 1 > headSeq) {
+                        val futureItag = representationHolder.representation.streamInfo.itag
+                        if (sabrClient.peekSegmentStartMs(futureItag, segmentNum + 1) == null) {
+                            android.util.Log.i(
+                                "SabrChunkSource",
+                                "live future wait: itag=$futureItag seq=${segmentNum + 1} > headSeq=$headSeq " +
+                                    "— no prefetch, wait for head advance (no request)"
+                            )
+                            return
+                        }
                     }
                     android.util.Log.i("SabrChunkSource", "live sequential: segmentNum=$segmentNum headSeq=$headSeq headTimeMs=$headTimeMs -> requestedTimeMs=$requestedTimeMs itag=${representationHolder.representation.streamInfo.itag} jumped=$jumpedForSync")
                 }
