@@ -456,18 +456,26 @@ class DefaultSabrChunkSource(
                         }
                     }
                     if (headTimeMs != null && requestedTimeMs > headTimeMs) requestedTimeMs = headTimeMs
-                    // Аварийный catch-up: загрузка отстала от плеера — по ЯКОРЮ (requestedTime) или по
-                    // ДЕКЛАРИРУЕМОМУ концу очереди (после flush/seek якорь и очередь могут разъехаться
-                    // по отдельности). Тянуть прошлое при живом плеере = буфер-минус → фриз и луп.
-                    // Обычное отставание от ПРЕФЕТЧА другого трека не трогаем — догоняется естественно.
-                    // Ориентируемся и на ПОЗИЦИЮ ОЧЕРЕДИ (loadPosition): после flush/remap
-                    // playbackPositionUs ещё старый (лог 13:31:41.840: requested 3605014 при очереди
-                    // 3639979 → повтор seq=721), а очередь уже на новой позиции. Порог по очереди шире
-                    // (6с), чтобы нормальный рывок декларируемого конца не давал ложных прыжков.
+                    // Аварийный catch-up: ТОЛЬКО реальное отставание от ПЛЕЕРА — по ЯКОРЮ
+                    // (requestedTime) или по ДЕКЛАРИРУЕМОМУ концу очереди. Тянуть прошлое при
+                    // живом плеере = буфер-минус → фриз и луп.
+                    // v7: критерий «requested позади конца очереди на 6с» (behindQueue) УДАЛЁН.
+                    // Очередь, убежавшая вперёд якоря — это НОРМАЛЬНЫЙ конвейер префетча: пока
+                    // спекулятивный чанк грузится (long-poll сервера), его декларируемое окно
+                    // заведомо впереди якоря на 1-2 шага сегмента (для аудио с шагом ~10с это
+                    // стабильно > 6с). Лог 15:37:55-15:38:43: за 48с — 14 «catch-up -> jump» на
+                    // ЗДОРОВОМ префетче, каждый jump переалиасил окно назад, media3 выкидывал
+                    // уже декларированные чанки (discardUpstreamMediaChunksFromIndex) — пила
+                    // буфера 29с→19с, дубли/повторы сэмплов и видимые перескоки позиции.
+                    // Расхождение якоря и очереди теперь не накапливается само: декларация
+                    // стартует от РЕАЛЬНОГО старта сегмента (peek префетча) или от конца якоря
+                    // (см. startTime ниже), поэтому зазор ограничен 1-2 шагами и не триггерит.
+                    // Реальные затыки ловит behindPlayback (якорь/конец позади плеера на 4с+),
+                    // рассинхрон окон после flush/seek — jumpedForSyncLocal ниже, seek назад —
+                    // live re-anchor выше.
                     val playerTimeMs = Util.usToMs(loadingInfo.playbackPositionUs)
                     val behindPlayback = requestedTimeMs < playerTimeMs - 4000 || declaredEndMs < playerTimeMs - 4000
-                    val behindQueue = requestedTimeMs < loadAbsMs - 6000 || declaredEndMs < loadAbsMs - 6000
-                    if (behindPlayback || behindQueue) {
+                    if (behindPlayback) {
                         val refTimeMs = maxOf(playerTimeMs, loadAbsMs)
                         val catchUpMs = maxOf(refTimeMs, sabrClient.getMaxLastReturnedTimeMs()?.takeIf { it > refTimeMs } ?: refTimeMs)
                         requestedTimeMs = headTimeMs?.let { minOf(catchUpMs, it) } ?: catchUpMs
@@ -520,9 +528,27 @@ class DefaultSabrChunkSource(
                 // Живём в АБСОЛЮТНОМ домене (сэмплы fMP4 = медиа-время эфира): начало чанка =
                 // реально отданный startMs (peek — чтобы декларируемое время очереди совпало с
                 // сэмплами, иначе buffered/readahead уплывает на величину клампа сервера),
-                // для initial/прыжка — запрошенное время; для последовательного — конец предыдущего чанка.
-                if (previousChunk != null && !jumpedForSyncLocal) previousChunk.endTimeUs
-                else {
+                // для initial/прыжка — запрошенное время.
+                // v7: для последовательной декларации НЕ берём больше previousChunk.endTimeUs —
+                // это ДЕКЛАРИРУЕМЫЙ конец предыдущего чанка, а при спекулятивной декларации
+                // (сегмент ещё не префетчен) он фиктивен. Каждый такой чанк двигал окно
+                // очереди на шаг вперёд РЕАЛЬНОГО контента (лог 15:37:53-55: три декларации
+                // за 1.1с из кэша унесли окно на 2151100 при контенте 2140200) — расхождение
+                // окно/сэмплы давало повторы и перескоки позиции. Вместо этого:
+                // 1) РЕАЛЬНЫЙ старт сегмента этого чанка из префетча (peekSegmentStartMs —
+                //    только точный seq, без тайм-матча: forward-матч мог бы дать окно
+                //    следующего сегмента при запросе текущего);
+                // 2) иначе — конец якоря (requestedTimeMs): лучший прогноз старта следующего
+                //    сегмента, ограничен одним шагом от уже отданного контента;
+                // 3) пол по старту якоря: повторная отдача старого seq не откатывает окно.
+                if (previousChunk != null && !jumpedForSyncLocal) {
+                    val seqItag = representationHolder.representation.streamInfo.itag
+                    val anchorStartMs = sabrClient.getLastReturnedTimeMs(seqItag)
+                    val realStartMs = sabrClient.peekSegmentStartMs(seqItag, segmentNum + 1)
+                        ?.let { if (anchorStartMs != null) maxOf(it, anchorStartMs) else it }
+                        ?: requestedTimeMs
+                    Util.msToUs(realStartMs)
+                } else {
                     val declaredStartMs = sabrClient.peekServedStartMs(
                         representationHolder.representation.streamInfo.itag,
                         segmentNum + 1,
