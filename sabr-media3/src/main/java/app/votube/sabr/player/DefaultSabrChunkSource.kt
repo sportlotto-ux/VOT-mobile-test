@@ -839,6 +839,15 @@ class DefaultSabrChunkSource(
         loadErrorInfo: LoadErrorInfo,
         loadErrorHandlingPolicy: LoadErrorHandlingPolicy,
     ): Boolean {
+        // Раньше метод молчал — ошибки загрузки (ретраи лоадера, тишины 11-22с) было не видно.
+        val req = chunk.dataSpec.customData as? PlaybackRequest
+        val nextIndex = (chunk as? MediaChunk)?.nextChunkIndex
+        android.util.Log.w(
+            "SabrChunkSource",
+            "chunk load error: type=${chunk.type}, itag=${req?.format?.itag}, seq=${req?.segment}, " +
+                "nextIndex=$nextIndex, cancelable=$cancelable, " +
+                "ex=${loadErrorInfo.exception.javaClass.simpleName}: ${loadErrorInfo.exception.message}"
+        )
         if (!cancelable) {
             return false
         }
@@ -856,6 +865,10 @@ class DefaultSabrChunkSource(
                 // A 404 for the first unavailable segment means the period has ended.
                 if (chunk.nextChunkIndex >= lastAvailableSegmentNum) {
                     missingLastSegment = true
+                    android.util.Log.i(
+                        "SabrChunkSource",
+                        "chunk load error: 404 at last segment $nextIndex — end of stream"
+                    )
                     return true
                 }
             }
@@ -865,12 +878,14 @@ class DefaultSabrChunkSource(
         if (!fallbackOptions.isFallbackAvailable(LoadErrorHandlingPolicy.FALLBACK_TYPE_TRACK)
             && !fallbackOptions.isFallbackAvailable(LoadErrorHandlingPolicy.FALLBACK_TYPE_LOCATION)
         ) {
+            android.util.Log.w("SabrChunkSource", "chunk load error: no fallback available — propagate")
             return false
         }
         val fallbackSelection =
             loadErrorHandlingPolicy.getFallbackSelectionFor(fallbackOptions, loadErrorInfo)
         if (fallbackSelection == null || !fallbackOptions.isFallbackAvailable(fallbackSelection.type)) {
             // Policy indicated to not use any fallback or a fallback type that is not available.
+            android.util.Log.w("SabrChunkSource", "chunk load error: policy declined fallback — propagate")
             return false
         }
 

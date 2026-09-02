@@ -58,19 +58,22 @@ class SabrDataSource(
 
         transferInitializing(dataSpec)
         transferStarted(dataSpec)
+        // Тег SABR-стрима, а не имя класса: иначе ошибки не видно под -s SabrStream:V.
         val segment = try {
             sabrClient.getNextSegment(playbackRequest)
                 ?: throw IOException("SABR returned no segment ${playbackRequest.segment} for ${playbackRequest.format.itag}")
         } catch (e: IOException) {
             Log.e(
-                SabrClient::class.java.name,
-                "open: failed to get segment ${playbackRequest.segment} for ${playbackRequest.format.itag}: $e"
+                "SabrStream",
+                "open: failed to get segment ${playbackRequest.segment} (timeMs=${playbackRequest.segmentStartTimeMs}) " +
+                    "for ${playbackRequest.format.itag}: $e"
             )
             throw e
         } catch (e: Exception) {
             Log.e(
-                SabrClient::class.java.name,
-                "open: failed to get segment ${playbackRequest.segment} for ${playbackRequest.format.itag}: $e"
+                "SabrStream",
+                "open: failed to get segment ${playbackRequest.segment} (timeMs=${playbackRequest.segmentStartTimeMs}) " +
+                    "for ${playbackRequest.format.itag}: $e"
             )
             throw IOException("SABR segment request failed", e)
         }
