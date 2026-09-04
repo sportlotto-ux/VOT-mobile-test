@@ -68,14 +68,7 @@ dependencies {
     implementation 'io.reactivex.rxjava2:rxandroid:' + rxAndroidVersion
     implementation 'io.reactivex.rxjava2:rxjava:' + rxJavaVersion
 
-    //////// BEGIN EXOPLAYER /////////
-
-    // TODO(media3): remove old exoplayer deps after full migration
-    // implementation project(':exoplayer-library')
-    // implementation project(':exoplayer-extension-okhttp')
-    // implementation project(':exoplayer-extension-cronet')
-
-    // Media3 player stack (migration from the old ExoPlayer 2.10 fork)
+    // Media3 player stack (migrated from the old ExoPlayer 2.10 fork, removed in v0.1.0)
     def media3Version = '1.4.1'
     api 'androidx.media3:media3-exoplayer:' + media3Version
     api 'androidx.media3:media3-exoplayer-dash:' + media3Version
@@ -87,16 +80,6 @@ dependencies {
     api 'androidx.media3:media3-datasource-cronet:' + media3Version
     api 'androidx.media3:media3-ui-leanback:' + media3Version
     implementation project(':sabr-media3')
-
-    // implementation 'com.amazon.android:exoplayer:' + amazonExoplayerVersion
-    // implementation 'com.amazon.android:extension-okhttp:' + amazonExoplayerVersion
-
-    // implementation 'com.google.android.exoplayer:exoplayer:' + exoplayerVersion
-    // implementation 'com.google.android.exoplayer:extension-okhttp:' + exoplayerVersion
-
-    // implementation 'com.github.amzn:exoplayer-amazon-port:' + amazonExoplayerJitpackVersion
-
-    //////// END EXOPLAYER //////////
 
     implementation 'androidx.media:media:' + mediaXVersion // exoplayer fix
 

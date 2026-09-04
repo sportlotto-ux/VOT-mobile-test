@@ -48,8 +48,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 
-// NOTE: original file taken from
-// https://github.com/google/ExoPlayer/blob/release-v2/library/ui/src/main/java/com/google/android/exoplayer2/ui/DebugTextViewHelper.java
+// NOTE: adapted from ExoPlayer's DebugTextViewHelper for androidx.media3.
 
 /**
  * A helper class for periodically updating a {@link TextView} with debug information obtained from

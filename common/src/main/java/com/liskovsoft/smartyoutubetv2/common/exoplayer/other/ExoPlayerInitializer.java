@@ -10,15 +10,12 @@ import androidx.media3.exoplayer.DefaultRenderersFactory;
 import androidx.media3.exoplayer.SeekParameters;
 import androidx.media3.exoplayer.ExoPlayer;
 import androidx.media3.common.AudioAttributes;
-import androidx.media3.exoplayer.drm.DrmSessionManager;
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector;
 import androidx.media3.exoplayer.upstream.BandwidthMeter;
 import androidx.media3.datasource.TransferListener;
 import com.liskovsoft.sharedutils.helpers.DeviceHelpers;
 import com.liskovsoft.smartyoutubetv2.common.prefs.PlayerData;
 import com.liskovsoft.smartyoutubetv2.common.prefs.PlayerTweaksData;
-
-import java.util.UUID;
 
 public class ExoPlayerInitializer {
     private final int mMaxBufferBytes;
@@ -197,11 +194,6 @@ public class ExoPlayerInitializer {
 
         mVolumeBooster = null;
         mPlayer = null;
-    }
-
-    // TODO(media3): rewire DRM to media3 DefaultDrmSessionManager.Builder if ever needed
-    private DrmSessionManager createDrmManager() {
-        return null;
     }
 
     private static final class DummyBandwidthMeter implements BandwidthMeter {

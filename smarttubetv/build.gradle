@@ -202,26 +202,7 @@ dependencies {
     implementation 'com.github.zjupure:webpdecoder:' + webpDecoderVersion
     implementation 'androidx.multidex:multidex:' + multiDexVersion
 
-    //////// BEGIN EXOPLAYER /////////
-
     implementation 'androidx.media3:media3-session:1.4.1'
-    // TODO(media3): remove old exoplayer deps after full migration
-    // implementation project(':exoplayer-library-core')
-    // implementation project(':exoplayer-library-ui')
-    // implementation project(':exoplayer-extension-leanback')
-    // implementation project(':exoplayer-extension-mediasession')
-
-    // implementation 'com.amazon.android:exoplayer:' + amazonExoplayerVersion
-    // implementation 'com.amazon.android:extension-leanback:' + amazonExoplayerVersion
-    // implementation 'com.amazon.android:extension-mediasession:' + amazonExoplayerVersion
-
-    // implementation 'com.google.android.exoplayer:exoplayer:' + exoplayerVersion
-    // implementation 'com.google.android.exoplayer:extension-leanback:' + exoplayerVersion
-    // implementation 'com.google.android.exoplayer:extension-mediasession:' + exoplayerVersion
-
-    // implementation 'com.github.amzn:exoplayer-amazon-port:' + amazonExoplayerJitpackVersion
-
-    //////// END EXOPLAYER //////////
 
     testImplementation 'junit:junit:' + junitVersion
     testImplementation 'org.robolectric:robolectric:' + robolectricVersion

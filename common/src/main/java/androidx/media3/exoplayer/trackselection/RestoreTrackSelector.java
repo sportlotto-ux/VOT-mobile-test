@@ -32,6 +32,8 @@ public class RestoreTrackSelector extends DefaultTrackSelector {
     }
 
     public void setOnTrackSelectCallback(@Nullable TrackSelectorCallback callback) {
-        // TODO(media3): restore custom auto-selection fixes on top of the new selectTracksForType API
+        // NOTE(media3): intentionally a no-op. The old auto-selection fixes were not
+        // carried over: automatic quality is handled by Exo defaults plus
+        // TrackSelectorManager.syncSelectedTrackWithSabr for the SABR path.
     }
 }

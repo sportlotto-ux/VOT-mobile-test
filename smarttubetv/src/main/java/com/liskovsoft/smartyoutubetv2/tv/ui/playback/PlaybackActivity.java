@@ -125,7 +125,6 @@ public class PlaybackActivity extends LeanbackActivity {
     }
 
     // For N devices that support it, not "officially"
-    // More: https://medium.com/s23nyc-tech/drop-in-android-video-exoplayer2-with-picture-in-picture-e2d4f8c1eb30
     @TargetApi(24)
     @SuppressWarnings("deprecation")
     private void enterPipMode() {

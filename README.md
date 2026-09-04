@@ -232,7 +232,7 @@ SmartTube is developed single-handedly; there is no larger team or company behin
 
 ## Build
     
-**NOTE: OpenJDK 14 or older (!) is required. Newer JDK could cause app crash!**  
+**NOTE: this fork builds with OpenJDK 17 (CI) on `androidx.media3 1.4.1` + native SABR/UMP — the original «JDK 14 or older» requirement no longer applies.**  
 To build and install debug version, run these commands:
 
 ```

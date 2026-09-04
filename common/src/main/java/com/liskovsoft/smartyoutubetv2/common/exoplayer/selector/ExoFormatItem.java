@@ -92,7 +92,7 @@ public class ExoFormatItem implements FormatItem {
             if (format.id != null) {
                 formatItem.mId = format.id.hashCode();
                 formatItem.mFormatId = format.id;
-                formatItem.mIsDrc = false; // TODO(media3): Format.isDrc removed
+                formatItem.mIsDrc = TrackSelectorUtil.isDrc(format); // media3 Format has no DRC flag, id-suffix heuristic
             }
         } else {
             formatItem.mIsDefault = true; // fake auto track
@@ -133,7 +133,7 @@ public class ExoFormatItem implements FormatItem {
                 frameRate = format.frameRate;
                 language = format.language;
                 bitrate = format.bitrate;
-                isDrc = false; // TODO(media3): Format.isDrc removed
+                isDrc = TrackSelectorUtil.isDrc(format);
             }
         }
 
