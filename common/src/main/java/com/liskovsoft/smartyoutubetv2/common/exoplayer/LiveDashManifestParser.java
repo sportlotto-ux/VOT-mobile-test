@@ -1,6 +1,7 @@
 package com.liskovsoft.smartyoutubetv2.common.exoplayer;
 
 import android.net.Uri;
+import androidx.annotation.Nullable;
 import androidx.media3.common.C;
 import androidx.media3.common.Format;
 import androidx.media3.exoplayer.dash.DashSegmentIndex;
@@ -92,6 +93,7 @@ public class LiveDashManifestParser extends DashManifestParser {
             distinct.put(m.group(2), null);
         }
         if (distinct.isEmpty()) {
+            Log.i(TAG, "rewriteNsig: no n-values in manifest (live MPD has none) — passthrough");
             return new ByteArrayInputStream(mpd.getBytes(StandardCharsets.UTF_8));
         }
 
@@ -204,7 +206,25 @@ public class LiveDashManifestParser extends DashManifestParser {
     }
 
     private static void appendRepresentation(Representation oldRepresentation, Representation newRepresentation, long segmentNumShift) {
+        // v25: BaseURL сегментов ротируется каждый refresh (sig/expire/ei),
+        // а добавляемые sq/ — относительные и резолвятся против СТАРОЙ базы mOldManifest.
+        // Итог: ~40с играет (свежая база стартового манифеста), дальше 403 на стыке окон.
+        // Фикс: все добавляемые (и ранее добавленные относительные) URI делаем абсолютными
+        // против СВЕЖЕЙ базы. sig не покрывает sq/lmt (их нет в sparams) — старые сегменты
+        // со свежей базой валидны. Поля final — поэтому мутируем содержимое списка in place.
+        if (!(newRepresentation instanceof MultiSegmentRepresentation)
+                || !(oldRepresentation instanceof MultiSegmentRepresentation)) {
+            Log.w(TAG, "appendRepresentation: not multi-segment — merge skipped");
+            return;
+        }
+        String freshBase = getFirstBaseUrl((MultiSegmentRepresentation) newRepresentation);
+        if (freshBase == null) {
+            Log.w(TAG, "appendRepresentation: no fresh baseUrls — merge skipped");
+            return;
+        }
+
         if (segmentNumShift <= 0) {
+            absolutizeAgainst(oldRepresentation, freshBase);
             return;
         }
 
@@ -225,8 +245,13 @@ public class LiveDashManifestParser extends DashManifestParser {
         //List<RangedUri> newMediaSegments = newSegmentList.mediaSegments;
         List<RangedUri> newMediaSegments = (List<RangedUri>) Helpers.getField(newSegmentList, "mediaSegments");
 
-        oldMediaSegments.addAll(
-                newMediaSegments.subList(newMediaSegments.size() - (int) segmentNumShift, newMediaSegments.size()));
+        // v25: чиним базу у уже лежащих относительных записей (идемпотентно), затем
+        // добавляем хвост нового окна сразу абсолютным против свежей базы.
+        absolutizeInPlace(oldMediaSegments, freshBase);
+        int tailSize = (int) Math.min(segmentNumShift, newMediaSegments.size());
+        List<RangedUri> tail = newMediaSegments.subList(newMediaSegments.size() - tailSize, newMediaSegments.size());
+        oldMediaSegments.addAll(absolutizeList(tail, freshBase));
+        segmentNumShift = tailSize;
 
         // TODO: modified
         //List<SegmentTimelineElement> oldSegmentTimeline = oldSegmentList.segmentTimeline;
@@ -251,8 +276,65 @@ public class LiveDashManifestParser extends DashManifestParser {
         }
     }
 
-    private static void recreateMissingSegments(DashManifest manifest) {
-        if (manifest == null) {
+    /**
+     * v25: свежая BaseURL (индекс 0 — дефолтный выбор Exo) с гарантированным '/' на конце.
+     */
+    @Nullable
+    private static String getFirstBaseUrl(MultiSegmentRepresentation representation) {
+        try {
+            List<BaseUrl> baseUrls = representation.baseUrls;
+            if (baseUrls != null && !baseUrls.isEmpty()) {
+                String url = baseUrls.get(0).url;
+                if (url != null && !url.isEmpty()) {
+                    return url.endsWith("/") ? url : url + "/";
+                }
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "getFirstBaseUrl failed: %s", e);
+        }
+        return null;
+    }
+
+    private static RangedUri absolutize(RangedUri seg, String freshBase) {
+        if (seg == null) {
+            return seg;
+        }
+        String ref = (String) Helpers.getField(seg, "referenceUri");
+        if (ref == null || ref.startsWith("http")) {
+            return seg;
+        }
+        return new RangedUri(freshBase + ref, seg.start, seg.length);
+    }
+
+    private static List<RangedUri> absolutizeList(List<RangedUri> segs, String freshBase) {
+        List<RangedUri> out = new ArrayList<>(segs.size());
+        for (RangedUri seg : segs) {
+            out.add(absolutize(seg, freshBase));
+        }
+        return out;
+    }
+
+    private static void absolutizeInPlace(List<RangedUri> segs, String freshBase) {
+        if (segs == null) {
+            return;
+        }
+        for (int i = 0; i < segs.size(); i++) {
+            segs.set(i, absolutize(segs.get(i), freshBase));
+        }
+    }
+
+    private static void absolutizeAgainst(Representation oldRepresentation, String freshBase) {
+        try {
+            MultiSegmentRepresentation multi = (MultiSegmentRepresentation) oldRepresentation;
+            SegmentList segmentList = (SegmentList) Helpers.getField(multi, "segmentBase");
+            List<RangedUri> segs = (List<RangedUri>) Helpers.getField(segmentList, "mediaSegments");
+            absolutizeInPlace(segs, freshBase);
+        } catch (Exception e) {
+            Log.w(TAG, "absolutizeAgainst failed: %s", e);
+        }
+    }
+
+    private static void recreateMissingSegments(DashManifest manifest) {        if (manifest == null) {
             return;
         }
 
