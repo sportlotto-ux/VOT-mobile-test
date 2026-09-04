@@ -73,9 +73,11 @@ private data class InitializedFormat(
     val id: FormatId,
     val downloadedSegments: MutableMap<Long, Segment> = mutableMapOf(),
     val bufferedSegments: MutableMap<Long, Segment> = mutableMapOf(),
-    val endSegmentNumber: Long,
+    // var: broadcast переприсылает init на каждый ответ — метаданные освежаем,
+    // сегменты НЕ вайпаем (иначе вечный downloaded=[] и рефетч).
+    var endSegmentNumber: Long,
     var initSegment: Segment? = null,
-    val duration: Long,
+    var duration: Long,
 ) {
     fun getSegment(sequenceNumber: Long): Segment? {
         val segment = downloadedSegments.remove(sequenceNumber)
@@ -172,10 +174,12 @@ class SabrClient private constructor(
     private fun <T> withState(block: () -> T): T = synchronized(stateLock, block)
     /** last use timestamp per itag — to avoid churn when ABR oscillates (keep recent formats) */
     private val lastFormatUseMs = mutableMapOf<Int, Long>()
-    /** Последний принятый сегмент по itag (без init) — для узких bufferedRanges.
-     *  Референс googlevideo докладывает серверу только последний кусок, а не всю очередь:
-     *  иначе в ответ валятся пачки по 6 сегментов/4МБ и рвут якоря. */
-    private val lastReceivedByItag = mutableMapOf<Int, Segment>()
+    /** Кумулятивная история отданного по itag: seq -> (startMs, durationMs).
+     *  v15 (sabr-dash-poc findings): серверу докладываем ВСЁ потреблённое за сессию
+     *  (merge: extend range ending at seq-1, else new — seek-гэпы сохраняются),
+     *  а не дельту с прошлого запроса — иначе "буфер не сходится" и сервер молча
+     *  перестаёт слать медиа (наши 164Б-спирали). Init не занимает время — не пишем. */
+    private val consumedSegsByItag = mutableMapOf<Int, MutableMap<Long, Pair<Long, Long>>>()
     /** флаг что live уже стартовал с головы — нужен чтобы отличить начальный edge от DVR rewind к началу */
     var hasStartedLive: Boolean = false
     private var lastRequestMs: Long? = null
@@ -332,6 +336,11 @@ class SabrClient private constructor(
             val endMs = nextStartMs
                 ?: seg.header.startMs + (realStepMsByItag[itag] ?: seg.duration)
             lastReturnedEndTimeMsByItag[itag] = maxOf(lastReturnedEndTimeMsByItag[itag] ?: endMs, endMs)
+            // Кумулятивная история для bufferedRanges (findings): init времени не занимает.
+            if (!seg.header.isInitSeg) {
+                consumedSegsByItag.getOrPut(itag) { mutableMapOf() }[seg.sequenceNumber] =
+                    seg.header.startMs to seg.duration
+            }
         }
     }
 
@@ -390,18 +399,49 @@ class SabrClient private constructor(
             listOfNotNull(audioFormat?.formatId(), videoFormat?.formatId())
         } else emptyList()
 
-    /** Узкие bufferedRanges: по последнему принятому сегменту текущих треков
-     *  (как у референса). Полную очередь не докладываем — сервер и так знает голову.
+    /** Кумулятивные ranges: потреблённое за сессию + held-префетч, merge по правилу
+     *  findings (extend при seq==prev+1, иначе новый range — гэпы seek'ов целы).
      *  Вызывать под локом. */
-    private fun buildNarrowBufferedRanges(): List<BufferedRange> {
+    private fun buildCumulativeBufferedRanges(): List<BufferedRange> {
         val currentItags = listOfNotNull(audioFormat?.streamInfo?.itag, videoFormat?.streamInfo?.itag)
-        return currentItags.mapNotNull { itag ->
-            val seg = lastReceivedByItag[itag] ?: return@mapNotNull null
-            val formatId = initializedFormats[itag]?.id ?: return@mapNotNull null
-            BufferedRange.newBuilder().setFormatId(formatId).setStartTimeMs(seg.header.startMs)
-                .setDurationMs(seg.duration)
-                .setStartSegmentIndex(seg.sequenceNumber.toInt())
-                .setEndSegmentIndex(seg.sequenceNumber.toInt()).build()
+        return currentItags.flatMap { itag ->
+            val formatId = initializedFormats[itag]?.id ?: return@flatMap emptyList()
+            val points = mutableMapOf<Long, Pair<Long, Long>>()
+            consumedSegsByItag[itag]?.let { points.putAll(it) }
+            initializedFormats[itag]?.downloadedSegments?.values?.forEach { seg ->
+                if (!seg.header.isInitSeg) {
+                    points.putIfAbsent(seg.sequenceNumber, seg.header.startMs to seg.duration)
+                }
+            }
+            if (points.isEmpty()) return@flatMap emptyList()
+            val sorted = points.entries.sortedBy { it.key }
+            val ranges = mutableListOf<BufferedRange>()
+            var runStart = sorted[0].key
+            var runStartMs = sorted[0].value.first
+            var runDur = sorted[0].value.second
+            var prev = sorted[0].key
+            fun flush() {
+                ranges.add(
+                    BufferedRange.newBuilder().setFormatId(formatId).setStartTimeMs(runStartMs)
+                        .setDurationMs(runDur)
+                        .setStartSegmentIndex(runStart.toInt())
+                        .setEndSegmentIndex(prev.toInt()).build()
+                )
+            }
+            for ((seq, td) in sorted.drop(1)) {
+                if (seq == prev + 1) {
+                    runDur += td.second
+                    prev = seq
+                } else {
+                    flush()
+                    runStart = seq
+                    runStartMs = td.first
+                    runDur = td.second
+                    prev = seq
+                }
+            }
+            flush()
+            ranges
         }
     }
 
@@ -627,7 +667,7 @@ class SabrClient private constructor(
                 .addAllPreferredAudioFormatIds(listOfNotNull(audioFormat?.formatId()))
                 .addAllPreferredVideoFormatIds(listOfNotNull(videoFormat?.formatId()))
                 .addAllSelectedFormatIds(currentSelectedIds())
-                .addAllBufferedRanges(buildNarrowBufferedRanges())
+                .addAllBufferedRanges(buildCumulativeBufferedRanges())
                 .setStreamerContext(StreamerContext.newBuilder().setPoToken(poToken ?: ByteString.empty())
                     .setClientInfo(StreamerContext.ClientInfo.newBuilder().setClientName(101).setClientVersion("1.02")
                         .setDeviceMake("Apple").setDeviceModel("RealityDevice14,1").setOsName("visionOS")
@@ -735,18 +775,27 @@ class SabrClient private constructor(
                 UMPPartId.FORMAT_INITIALIZATION_METADATA -> {
                     val metadata = FormatInitializationMetadata.parseFrom(part.data)
                     Log.i(TAG, "format init: itag=${metadata.formatId.itag}, endSegment=${metadata.endSegmentNumber}, endTimeMs=${metadata.endTimeMs}, mime=${metadata.mimeType}")
-                    val format = InitializedFormat(
-                        metadata.formatId,
-                        endSegmentNumber = metadata.endSegmentNumber,
-                        duration = metadata.endTimeMs,
-                    )
-                    initializedFormats[metadata.formatId.itag] = format
-                    lastFormatUseMs[metadata.formatId.itag] = SystemClock.elapsedRealtime()
-                    val pending = pendingSegments.remove(metadata.formatId.itag)
-                    if (pending != null) {
-                        Log.i(TAG, "flushing ${pending.size} pending segments for itag=${metadata.formatId.itag}")
-                        pending.forEach { storeSegment(format, it) }
+                    val existing = initializedFormats[metadata.formatId.itag]
+                    if (existing != null) {
+                        // v15 (sabr-dash-poc findings): broadcast шлёт init на каждый ответ.
+                        // Только освежаем метаданные — кэш сегментов НЕ трогаем, иначе каждый
+                        // ответ вайпает downloaded и клиент вечно рефетчит (downloaded=[]).
+                        existing.endSegmentNumber = metadata.endSegmentNumber
+                        existing.duration = metadata.endTimeMs
+                    } else {
+                        val format = InitializedFormat(
+                            metadata.formatId,
+                            endSegmentNumber = metadata.endSegmentNumber,
+                            duration = metadata.endTimeMs,
+                        )
+                        initializedFormats[metadata.formatId.itag] = format
+                        val pending = pendingSegments.remove(metadata.formatId.itag)
+                        if (pending != null) {
+                            Log.i(TAG, "flushing ${pending.size} pending segments for itag=${metadata.formatId.itag}")
+                            pending.forEach { storeSegment(format, it) }
+                        }
                     }
+                    lastFormatUseMs[metadata.formatId.itag] = SystemClock.elapsedRealtime()
                 }
                 UMPPartId.LIVE_METADATA -> {
                     val meta = LiveMetadata.parseFrom(part.data)
@@ -837,7 +886,6 @@ class SabrClient private constructor(
     private fun storeSegment(format: InitializedFormat, segment: Segment) {
         format.downloadedSegments[segment.sequenceNumber] = segment
         mediaStoredCounter++
-        if (!segment.header.isInitSeg) lastReceivedByItag[segment.header.itag] = segment
         if (segment.header.isInitSeg) format.initSegment = segment
         lastFormatUseMs[segment.header.itag] = SystemClock.elapsedRealtime()
         Log.i(TAG, "media segment stored: itag=${segment.header.itag}, " +
