@@ -322,7 +322,7 @@ class DefaultSabrChunkSource(
                 android.util.Log.i(
                     "SabrChunkSource",
                     "live initial quality: holder idx=$initialIdx, " +
-                        "itag=${rep.streamInfo.itag}, ${rep.width}x${rep.height} " +
+                        "itag=${rep.streamInfo.itag}, ${rep.format.width}x${rep.format.height} " +
                         "(selector was idx=${trackSelection.selectedIndex})"
                 )
             }
@@ -964,7 +964,10 @@ class DefaultSabrChunkSource(
         var lowest = 0
         var lowestH = Int.MAX_VALUE
         for (i in representationHolders.indices) {
-            val h = representationHolders[i].representation.height ?: continue
+            val h = representationHolders[i].representation.format.height
+            if (h <= 0) {
+                continue
+            }
             if (h <= 480 && h > bestUnderH) {
                 bestUnderH = h
                 bestUnder = i
@@ -983,12 +986,12 @@ class DefaultSabrChunkSource(
         val rep = holder.representation
         if (trackType == C.TRACK_TYPE_VIDEO) {
             val itag = rep.streamInfo.itag
-            SabrQualityMonitor.onVideoServed(manifest.videoId, itag, rep.width ?: -1, rep.height ?: -1)
+            SabrQualityMonitor.onVideoServed(manifest.videoId, itag, rep.format.width, rep.format.height)
             if (itag != lastReportedVideoItag) {
                 lastReportedVideoItag = itag
                 android.util.Log.i(
                     "SabrChunkSource",
-                    "served quality: video itag=$itag ${rep.width}x${rep.height}"
+                    "served quality: video itag=$itag ${rep.format.width}x${rep.format.height}"
                 )
             }
         } else if (trackType == C.TRACK_TYPE_AUDIO) {
