@@ -80,12 +80,11 @@ public class ExoMediaSourceFactory {
     private static final String HLS_PLAYLIST_EXTENSION = "m3u8";
     private static final boolean USE_BANDWIDTH_METER = false;
     private static final long FETCH_TIMEOUT_MS = 6000;
-    // v23: native DASH-live ОТКЛЮЧЁН — откат к SABR-UMP (v20 стабилен).
-    // Причина: сегментные BaseURL в dash-манифесте несут сырой nsig-параметр n=
-    // (лог 10:44–10:46: играет ~40с → 403 на сегментах; наш applyNParams дешифрует n
-    // только для adaptiveFormats, манифест идёт мимо). Фаза 2: прогнать BaseURL через
-    // nsigsolver + переписывать при refresh манифеста — тогда флаг вернуть в true.
-    private static final boolean DASH_LIVE_ENABLED = false;
+    // v24: native DASH-live ВКЛЮЧЁН обратно. nsig-фикс: LiveDashManifestParser.rewriteNsig
+    // решает сырой n= в BaseURL через AppService/V8ChallengeProvider (тот же солвер,
+    // что чинит adaptiveFormats) — и на старте, и на каждом refresh манифеста.
+    // Диагноз v22: сырой n → 403 на сегментах после ~40с grace-периода.
+    private static final boolean DASH_LIVE_ENABLED = true;
     private TrackErrorFixer mTrackErrorFixer;
     private DataSource.Factory mMediaDataSourceFactory;
 

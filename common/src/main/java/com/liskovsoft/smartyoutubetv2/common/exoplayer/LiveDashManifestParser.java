@@ -21,11 +21,19 @@ import com.liskovsoft.sharedutils.mylogger.Log;
 import com.liskovsoft.sharedutils.querystringparser.UrlQueryString;
 import com.liskovsoft.sharedutils.querystringparser.UrlQueryStringFactory;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Supported ExoPlayer versions: 2.10.6
@@ -41,10 +49,15 @@ public class LiveDashManifestParser extends DashManifestParser {
     private static final long MAX_NEW_STREAM_LENGTH_MS = 30 * 1_000;
     private DashManifest mOldManifest;
     private long mOldSegmentNum;
+    // v24: сырой nsig (n=) в BaseURL сегментов → 403 после grace-периода (~40с).
+    // Решаем через штатный V8ChallengeProvider (тот же, что чинит adaptiveFormats),
+    // кешируем raw→solved. Вызывается и на старте, и на каждом refresh манифеста.
+    private static final Pattern NSIG_PATTERN = Pattern.compile("([?&]n=)([^&\"'<>\\s]+)");
+    private static final Map<String, String> sSolvedNsig = new ConcurrentHashMap<>();
 
     @Override
     public DashManifest parse(Uri uri, InputStream inputStream) throws IOException {
-        DashManifest manifest = super.parse(uri, inputStream);
+        DashManifest manifest = super.parse(uri, rewriteNsig(inputStream));
 
         //Log.d(TAG, "Parse start: " + System.currentTimeMillis());
 
@@ -53,6 +66,72 @@ public class LiveDashManifestParser extends DashManifestParser {
         //Log.d(TAG, "Parse end: " + System.currentTimeMillis());
 
         return mOldManifest;
+    }
+
+    /**
+     * v24: решает сырые nsig (n=) в BaseURL сегментов через AppService/V8ChallengeProvider.
+     * Работает на loader-тредах Exo (не main), покрывает и стартовый манифест, и refresh.
+     * При провале солвера оставляет raw n (деградация к поведению v22, в лог).
+     */
+    private static InputStream rewriteNsig(InputStream inputStream) throws IOException {
+        ByteArrayOutputStream bos = new ByteArrayOutputStream();
+        byte[] buf = new byte[8192];
+        int n;
+        while ((n = inputStream.read(buf)) != -1) {
+            bos.write(buf, 0, n);
+        }
+        String mpd = new String(bos.toByteArray(), StandardCharsets.UTF_8);
+
+        if (!mpd.contains("googlevideo")) {
+            return new ByteArrayInputStream(mpd.getBytes(StandardCharsets.UTF_8));
+        }
+
+        Map<String, String> distinct = new LinkedHashMap<>();
+        Matcher m = NSIG_PATTERN.matcher(mpd);
+        while (m.find()) {
+            distinct.put(m.group(2), null);
+        }
+        if (distinct.isEmpty()) {
+            return new ByteArrayInputStream(mpd.getBytes(StandardCharsets.UTF_8));
+        }
+
+        int solved = 0, cached = 0, failed = 0;
+        for (String raw : distinct.keySet()) {
+            String done = sSolvedNsig.get(raw);
+            if (done != null) {
+                cached++;
+            } else {
+                try {
+                    done = com.liskovsoft.youtubeapi.app.AppService.instance().extractNSig(raw);
+                } catch (Exception e) {
+                    Log.w(TAG, "rewriteNsig: solver crashed for n=%s: %s", raw, e);
+                    done = null;
+                }
+                if (!android.text.TextUtils.isEmpty(done) && !done.equals(raw)) {
+                    sSolvedNsig.put(raw, done);
+                    solved++;
+                } else {
+                    failed++;
+                    done = null;
+                }
+            }
+            distinct.put(raw, done);
+        }
+
+        if (solved + cached > 0) {
+            StringBuffer sb = new StringBuffer();
+            Matcher rm = NSIG_PATTERN.matcher(mpd);
+            while (rm.find()) {
+                String replacement = distinct.get(rm.group(2));
+                rm.appendReplacement(sb, Matcher.quoteReplacement(rm.group(1) +
+                        (replacement != null ? replacement : rm.group(2))));
+            }
+            rm.appendTail(sb);
+            mpd = sb.toString();
+        }
+        Log.i(TAG, "rewriteNsig: n-values=%s solved=%s cached=%s failed=%s",
+                distinct.size(), solved, cached, failed);
+        return new ByteArrayInputStream(mpd.getBytes(StandardCharsets.UTF_8));
     }
 
     private void appendManifest(DashManifest newManifest) {
