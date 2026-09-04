@@ -100,16 +100,20 @@ class SabrMediaSource(
        getCurrentLiveOffset(). Итог — после любого микрофриза/зависания загрузки
        (лог 14:48:28→14:49:00: 32с молчания UMP-чтения) позиция плеера навсегда
        оставалась на 31-32с позади головы эфира — ничто её не подтягивало.
-       Теперь: targetOffset 15с (как в браузере), после ребуфера цель мягко
-       поднимается до maxOffset 20с (защита от шторма ребуферов на медленном
-       канале), разгон до 1.2x возвращает накопленную латентность (~30с за ~2.5 мин,
-       звук тянется Sonic без изменения тона). Плеер сам не трогает скорость,
-       если пользователь вручную выставил не-1x (условие playbackParameters.speed==1f). */
+        Теперь: targetOffset 15с (как в браузере), после ребуфера цель мягко
+        поднимается до maxOffset 60с: наш темп выборки SABR ≈ темпу потребления
+        (roundtrip 1.7–2.5с за 2с медиа, запаса почти нет), и кап 20с гарантировал
+        seek-шторм — лог 08:40: лаг >20с → seek к defaultPos (head−15с) → убитые
+        in-flight (InterruptedException) → выброшенное скачанное → перезапрос →
+        снова лаг. С капом 60с transient-лаги съедает разгон до 1.2x
+        (~30с за ~2.5 мин, звук тянется Sonic без изменения тона), а seek к краю
+        остаётся только для настоящих stalls. Плеер сам не трогает скорость,
+        если пользователь вручную выставил не-1x (условие playbackParameters.speed==1f). */
     private val liveConfiguration: MediaItem.LiveConfiguration =
         MediaItem.LiveConfiguration.Builder()
             .setTargetOffsetMs(15000)
             .setMinOffsetMs(12000)
-            .setMaxOffsetMs(20000)
+            .setMaxOffsetMs(60000)
             .setMinPlaybackSpeed(1.0f)
             .setMaxPlaybackSpeed(1.2f)
             .build()

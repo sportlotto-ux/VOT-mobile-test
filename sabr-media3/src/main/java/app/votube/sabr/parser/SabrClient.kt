@@ -888,8 +888,27 @@ class SabrClient private constructor(
         mediaStoredCounter++
         if (segment.header.isInitSeg) format.initSegment = segment
         lastFormatUseMs[segment.header.itag] = SystemClock.elapsedRealtime()
+        evictStaleSegments(format)
         Log.i(TAG, "media segment stored: itag=${segment.header.itag}, " +
             "sequence=${segment.sequenceNumber}, init=${segment.header.isInitSeg}, bytes=${segment.length()}")
+    }
+
+    /** v16: пропущенные префетчи (очередь перепрыгнула после seek'а к краю) иначе лежат
+     *  в downloaded вечно: лог 08:40 — seq=15303 в downloaded спустя минуты, fallback
+     *  available=[15303, …] врёт, память растёт (v15 убрал вайп, эвикции не было).
+     *  Держим ~4 мин DVR назад от головы + жёсткий кап; consumed-историю — ~20 мин. */
+    private fun evictStaleSegments(format: InitializedFormat) = withState {
+        val head = liveMetadata?.headSequenceNumber ?: return@withState
+        val floor = head - STALE_KEEP_SEGS
+        if (format.downloadedSegments.size > STALE_EVICT_THRESHOLD) {
+            format.downloadedSegments.keys.removeAll { it < floor }
+        }
+        if (format.bufferedSegments.size > STALE_EVICT_THRESHOLD) {
+            format.bufferedSegments.keys.removeAll { it < floor }
+        }
+        consumedSegsByItag[format.id.itag]?.let { hist ->
+            if (hist.size > CONSUMED_HIST_CAP) hist.keys.removeAll { it < head - CONSUMED_HIST_KEEP }
+        }
     }
 
     fun generatePoToken(): ByteString? =
@@ -908,6 +927,12 @@ class SabrClient private constructor(
          *  следующий 2с-кусок, долбить его каждые 250мс бессмысленно — ждём ~половину
          *  ритма эфира. См. шторм 169Б в логе 22:04:57 (10 запросов за 1.3с). */
         private const val EMPTY_BACKOFF_MS = 900L
+        /** v16: окно эвикции пропущенных префетчей (~4 мин DVR от головы) и порог срабатывания. */
+        private const val STALE_KEEP_SEGS = 120L
+        private const val STALE_EVICT_THRESHOLD = 120
+        /** v16: кап consumed-истории для cumulative bufferedRanges (~20 мин). */
+        private const val CONSUMED_HIST_KEEP = 600L
+        private const val CONSUMED_HIST_CAP = 1500
         /** максимальное расхождение по времени (мс) для тайм-матча вперёд — ~1.5 live-сегмента.
          *  Было 30_000: фолбэк молча отдавал чанк до 30с не от запрошенного места → рассинхрон.
          *  Было 12_500: кэш-матч подхватывал сегмент на 11с вперёд от запрошенного (лог 12:36:56:
