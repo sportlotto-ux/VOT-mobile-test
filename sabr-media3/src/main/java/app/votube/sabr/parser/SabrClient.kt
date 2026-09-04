@@ -950,7 +950,7 @@ class SabrClient private constructor(
 
     /** Точный перевод ticks→ms без переполнения: сначала деление, остаток — отдельно.
      *  Прямое ticks*1000 вылетает за Long при ns-timescale (лог 09:48:43). */
-    private fun ticksToMs(ticks: Long, timescale: Long): Long =
+    private fun ticksToMs(ticks: Long, timescale: Int): Long =
         if (timescale <= 0) 0L else ticks / timescale * 1000 + (ticks % timescale) * 1000 / timescale
 
     companion object {
