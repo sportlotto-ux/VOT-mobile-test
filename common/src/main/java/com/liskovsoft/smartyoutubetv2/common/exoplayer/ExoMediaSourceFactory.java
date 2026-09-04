@@ -79,6 +79,7 @@ public class ExoMediaSourceFactory {
     private static final String DASH_MANIFEST_EXTENSION = "mpd";
     private static final String HLS_PLAYLIST_EXTENSION = "m3u8";
     private static final boolean USE_BANDWIDTH_METER = false;
+    private static final long FETCH_TIMEOUT_MS = 6000;
     private TrackErrorFixer mTrackErrorFixer;
     private DataSource.Factory mMediaDataSourceFactory;
 
@@ -105,6 +106,20 @@ public class ExoMediaSourceFactory {
     // v21-dash-live spike: минимальный ANDROID player-запрос ради streamingData.dashManifestUrl.
     // Контекст 1:1 как в Constants.kt (ANDROID 21.26.364), ключ — тот же API_KEY_NEW.
     // TODO(spike): при успехе перенести в экстрактор (InnertubeService) и кешировать на сессию.
+    @Nullable
+    private String fetchAndroidDashManifestUrlBg(@Nullable String videoId) {
+        java.util.concurrent.ExecutorService exec = java.util.concurrent.Executors.newSingleThreadExecutor();
+        java.util.concurrent.Future<String> future = exec.submit(() -> fetchAndroidDashManifestUrl(videoId));
+        exec.shutdown();
+        try {
+            return future.get(FETCH_TIMEOUT_MS, java.util.concurrent.TimeUnit.MILLISECONDS);
+        } catch (Exception e) {
+            future.cancel(true);
+            Log.w(TAG, "fetchAndroidDashManifestUrlBg failed: %s", e);
+            return null;
+        }
+    }
+
     @Nullable
     private String fetchAndroidDashManifestUrl(@Nullable String videoId) {
         if (TextUtils.isEmpty(videoId)) {
@@ -150,7 +165,7 @@ public class ExoMediaSourceFactory {
             Log.i(TAG, "fetchAndroidDashManifestUrl: videoId=%s, dashUrl=%s", videoId, !TextUtils.isEmpty(dashUrl));
             return dashUrl;
         } catch (Exception e) {
-            Log.w(TAG, "fetchAndroidDashManifestUrl failed: %s", e.getMessage());
+            Log.w(TAG, "fetchAndroidDashManifestUrl failed: %s", e);
             return null;
         } finally {
             if (conn != null) {
@@ -282,8 +297,10 @@ public class ExoMediaSourceFactory {
         // v21-dash-live spike, шаг 2: у победителя dash-урла нет (dashUrl=false) — тянем его
         // из ANDROID-ответа (curl 09-04: ANDROID для live отдаёт dashManifestUrl + sabr).
         // Один POST на старт стрима; провал/таймаут — молча старый путь через SABR-UMP ниже.
+        // v22: фабрика вызывается на main thread (NetworkOnMainThread!) — запрос в фоне
+        // с ограниченным ожиданием FETCH_TIMEOUT_MS.
         if (durationMs == C.TIME_UNSET) {
-            String androidDashUrl = fetchAndroidDashManifestUrl(formatInfo.getVideoId());
+            String androidDashUrl = fetchAndroidDashManifestUrlBg(formatInfo.getVideoId());
             if (!TextUtils.isEmpty(androidDashUrl)) {
                 Log.i(TAG, "buildSabrMediaSource: live + ANDROID dashManifestUrl — native DASH instead of SABR-UMP: %s",
                         androidDashUrl);
