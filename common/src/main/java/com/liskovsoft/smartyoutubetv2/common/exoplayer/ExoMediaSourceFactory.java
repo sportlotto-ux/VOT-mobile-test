@@ -80,12 +80,15 @@ public class ExoMediaSourceFactory {
     private static final String HLS_PLAYLIST_EXTENSION = "m3u8";
     private static final boolean USE_BANDWIDTH_METER = false;
     private static final long FETCH_TIMEOUT_MS = 6000;
-    // v25: native DASH-live ВКЛЮЧЁН. Два фикса в LiveDashManifestParser:
-    // 1) rewriteNsig решает сырой n= (для live-MPD оказался no-op — n там нет, но пусть живёт);
-    // 2) appendRepresentation делает sq/ абсолютными против СВЕЖЕЙ BaseURL каждого refresh.
-    // Диагноз v22/v24: BaseURL ротируется (sig/expire/ei), новые сегменты резолвились
-    // против старой базы → 403 ровно на стыке окон (~40с).
-    private static final boolean DASH_LIVE_ENABLED = true;
+    // v27: native DASH-live ВЫКЛЮЧЕН обратно (возврат к SABR-UMP как в v23).
+    // Вердикт по diag v26: свежие BaseURL (валидный sig/expire) получают мгновенный 403
+    // по всем itag с первой секунды (лестница 137→…→160 за 0.5с), тренд дня — монотонное
+    // ужесточение (30 мин утром → смерть на 40с → мгновенная смерть). Сервер отвергает
+    // сам класс URL (нет клиентской телеметрии met/mm/mn/ms под lsig), а не их форму:
+    // nsig-теория мертва (n в live-MPD нет), ротация баз реальна, но не причина.
+    // Live остаётся на SABR (poToken-сессии доверяют); следующий шаг — качество SABR-live.
+    // Код v24-v26 (rewriteNsig, absolutize, DiagLoggingDataSource) живёт под этим флагом.
+    private static final boolean DASH_LIVE_ENABLED = false;
     private TrackErrorFixer mTrackErrorFixer;
     private DataSource.Factory mMediaDataSourceFactory;
 
