@@ -530,6 +530,49 @@ class SabrClient private constructor(
                         null
                     }?.let { return@withContext it }
                 }
+                // v14: дырка в серии itag (лог 08:09:28: audio 516 нет, available=[515],
+                // head=517 — и дальше 16с спама 164Б + error-backoff лоадера до смены трека).
+                // Вместо фатала — один прыжок якорей к голове и повтор: пропущенный seq
+                // считаем скипом сервера. Лоадер всё время занят (дедлока v13 нет), спам
+                // ограничен парой пустых ответов, а не 16с.
+                if (liveMetadata != null) {
+                    val headSeqNow = withState { liveMetadata?.headSequenceNumber }
+                    val headTimeNow = withState { liveMetadata?.headTimeMs }
+                    if (headSeqNow != null && headSeqNow > playbackRequest.segment) {
+                        Log.w(TAG, "live hole skip: itag=$itag seq=${playbackRequest.segment} missing, head=$headSeqNow — re-anchor and retry once")
+                        val stepMs = withState { getLastRealStepMs(itag) } ?: 2000L
+                        withState {
+                            lastReturnedSequenceByItag[itag] = headSeqNow - 1
+                            if (headTimeNow != null) {
+                                lastReturnedTimeMsByItag[itag] = headTimeNow - stepMs
+                                lastReturnedEndTimeMsByItag[itag] = headTimeNow
+                            } else {
+                                lastReturnedTimeMsByItag.remove(itag)
+                                lastReturnedEndTimeMsByItag.remove(itag)
+                            }
+                        }
+                        val skipReq = PlaybackRequest(
+                            playbackRequest.format,
+                            playbackRequest.playerPosition,
+                            playbackRequest.playbackSpeed,
+                            headSeqNow,
+                            headTimeNow ?: playbackRequest.segmentStartTimeMs,
+                            playbackRequest.bufferedSegments,
+                        )
+                        media(skipReq)
+                        val skipServed = withState {
+                            val f = initializedFormats[itag] ?: return@withState null
+                            val exact = if (f.hasSegment(headSeqNow)) f.getSegment(headSeqNow) else null
+                            exact ?: findTimeMatch(f, skipReq.segmentStartTimeMs, itag)
+                                ?.let { f.getSegment(it.sequenceNumber) }
+                        }
+                        if (skipServed != null) {
+                            Log.i(TAG, "live hole skip served: itag=$itag seq=${skipServed.sequenceNumber} startMs=${skipServed.header.startMs} (was stuck at ${playbackRequest.segment})")
+                            noteServed(itag, skipServed)
+                            return@withContext skipServed
+                        }
+                    }
+                }
                 null
             }
         }
