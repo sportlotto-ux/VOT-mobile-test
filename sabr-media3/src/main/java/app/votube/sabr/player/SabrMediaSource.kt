@@ -248,8 +248,15 @@ class SabrMediaSource(
         val windowUs = Util.msToUs(windowMs)
         // Стабильность как в браузере — 15 сек до головы (3 сегмента), не меньше 5 сек от начала
         val defaultPosUs = (windowUs - Util.msToUs(15000)).coerceAtLeast(Util.msToUs(5000).coerceAtMost(windowUs / 2))
-        // Обновляем только если окно выросло (голова движется)
-        if (windowUs != liveWindowDurationUs) {
+        // Обновляем только если окно заметно выросло (голова +5с).
+        // v29: душим стартовый seek-шторм. Было: каждый тик LiveMetadata (1-4с) дёргал
+        // refreshSourceInfo; пока positionUs не зафиксирован стартом воспроизведения,
+        // Exo на каждый refresh перерезолвит старт в новый default → seek → отмена
+        // in-flight загрузок (InterruptedException) → буфер не строится → позиция не
+        // фиксируется → следующий refresh снова seek. С паузой 5с+ первый же чанк
+        // успевает докачаться, позиция фиксируется, шторм глохнет после 1-2 seek'ов.
+        if (windowUs != liveWindowDurationUs &&
+            (liveWindowDurationUs == C.TIME_UNSET || windowUs - liveWindowDurationUs >= 5_000_000)) {
             liveWindowDurationUs = windowUs
             liveDefaultPositionUs = defaultPosUs
             android.util.Log.i("SabrMediaSource", "live timeline update: headTimeMs=$headTimeMs windowStartMs=$windowStartMs windowMs=$windowMs defaultPosMs=${Util.usToMs(defaultPosUs)}")
