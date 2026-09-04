@@ -80,6 +80,12 @@ public class ExoMediaSourceFactory {
     private static final String HLS_PLAYLIST_EXTENSION = "m3u8";
     private static final boolean USE_BANDWIDTH_METER = false;
     private static final long FETCH_TIMEOUT_MS = 6000;
+    // v23: native DASH-live ОТКЛЮЧЁН — откат к SABR-UMP (v20 стабилен).
+    // Причина: сегментные BaseURL в dash-манифесте несут сырой nsig-параметр n=
+    // (лог 10:44–10:46: играет ~40с → 403 на сегментах; наш applyNParams дешифрует n
+    // только для adaptiveFormats, манифест идёт мимо). Фаза 2: прогнать BaseURL через
+    // nsigsolver + переписывать при refresh манифеста — тогда флаг вернуть в true.
+    private static final boolean DASH_LIVE_ENABLED = false;
     private TrackErrorFixer mTrackErrorFixer;
     private DataSource.Factory mMediaDataSourceFactory;
 
@@ -288,7 +294,7 @@ public class ExoMediaSourceFactory {
         // Играем dashManifestUrl штатным DashMediaSource: live edge, DVR-окно, refresh
         // манифеста и ABR — кодом Exo, а не нашими якорями. Прокси не нужен: качаем сегменты
         // и играем с одного IP устройства. Нет dash-урла — старый путь через SABR-UMP ниже.
-        if (durationMs == C.TIME_UNSET && formatInfo.containsDashUrl()
+        if (DASH_LIVE_ENABLED && durationMs == C.TIME_UNSET && formatInfo.containsDashUrl()
                 && !TextUtils.isEmpty(formatInfo.getDashManifestUrl())) {
             Log.i(TAG, "buildSabrMediaSource: live + dashManifestUrl — native DASH instead of SABR-UMP: %s",
                     formatInfo.getDashManifestUrl());
@@ -299,7 +305,7 @@ public class ExoMediaSourceFactory {
         // Один POST на старт стрима; провал/таймаут — молча старый путь через SABR-UMP ниже.
         // v22: фабрика вызывается на main thread (NetworkOnMainThread!) — запрос в фоне
         // с ограниченным ожиданием FETCH_TIMEOUT_MS.
-        if (durationMs == C.TIME_UNSET) {
+        if (DASH_LIVE_ENABLED && durationMs == C.TIME_UNSET) {
             String androidDashUrl = fetchAndroidDashManifestUrlBg(formatInfo.getVideoId());
             if (!TextUtils.isEmpty(androidDashUrl)) {
                 Log.i(TAG, "buildSabrMediaSource: live + ANDROID dashManifestUrl — native DASH instead of SABR-UMP: %s",
