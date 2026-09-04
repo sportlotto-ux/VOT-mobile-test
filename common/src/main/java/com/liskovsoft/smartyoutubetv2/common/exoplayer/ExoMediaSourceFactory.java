@@ -205,6 +205,17 @@ public class ExoMediaSourceFactory {
 
         long durationMs = getDurationMs(formatInfo);
         Log.i(TAG, "buildSabrMediaSource: building SABR source, formats=%s, durationMs=%s (live=%s)", adaptiveFormatCount, durationMs, durationMs == C.TIME_UNSET);
+        // v19-dash-live spike (sabr-dash-poc findings: live — это не SABR-UMP, а нативный
+        // dynamic-DASH YouTube; их headless-SabrStream тоже не довёл live до выхода).
+        // Играем dashManifestUrl штатным DashMediaSource: live edge, DVR-окно, refresh
+        // манифеста и ABR — кодом Exo, а не нашими якорями. Прокси не нужен: качаем сегменты
+        // и играем с одного IP устройства. Нет dash-урла — старый путь через SABR-UMP ниже.
+        if (durationMs == C.TIME_UNSET && formatInfo.containsDashUrl()
+                && !TextUtils.isEmpty(formatInfo.getDashManifestUrl())) {
+            Log.i(TAG, "buildSabrMediaSource: live + dashManifestUrl — native DASH instead of SABR-UMP: %s",
+                    formatInfo.getDashManifestUrl());
+            return fromDashManifestUrl(formatInfo.getDashManifestUrl());
+        }
         SabrManifest manifest = new SabrManifest(
                 formatInfo.getVideoId(),
                 formatInfo.getServerAbrStreamingUrl(),
