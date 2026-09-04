@@ -240,10 +240,13 @@ public class ExoMediaSourceFactory {
                 }
                 return ssSource;
             case C.TYPE_DASH:
+                // v26-diag (ВРЕМЕННО): обёртка логирует URL упавших с 4xx/5xx запросов
+                // (тег DiagLoggingDataSource) — отличить 403 на sq/ от 403 на refresh.
+                DataSource.Factory loggingFactory = new DiagLoggingDataSource.Factory(getMediaDataSourceFactory());
                 DashMediaSource dashSource =
                         new DashMediaSource.Factory(
-                                getDashChunkSourceFactory(),
-                                getMediaDataSourceFactory()
+                                getDashChunkSourceFactory(loggingFactory),
+                                loggingFactory
                         )
                                 .setManifestParser(new LiveDashManifestParser()) // Don't make static! Need state reset for each live source.
                                 .setLoadErrorHandlingPolicy(new DashDefaultLoadErrorHandlingPolicy())
@@ -561,7 +564,12 @@ public class ExoMediaSourceFactory {
 
     @NonNull
     private DashChunkSource.Factory getDashChunkSourceFactory() {
-        return new DefaultDashChunkSource.Factory(getMediaDataSourceFactory(), MAX_SEGMENTS_PER_LOAD);
+        return getDashChunkSourceFactory(getMediaDataSourceFactory());
+    }
+
+    @NonNull
+    private DashChunkSource.Factory getDashChunkSourceFactory(DataSource.Factory mediaDataSourceFactory) {
+        return new DefaultDashChunkSource.Factory(mediaDataSourceFactory, MAX_SEGMENTS_PER_LOAD);
     }
 
     private DataSource.Factory getMediaDataSourceFactory() {
