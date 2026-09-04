@@ -56,8 +56,13 @@ import com.liskovsoft.smartyoutubetv2.common.prefs.PlayerTweaksData;
 import com.liskovsoft.smartyoutubetv2.common.utils.Utils;
 import com.liskovsoft.googlecommon.common.helpers.DefaultHeaders;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.Executors;
@@ -95,6 +100,63 @@ public class ExoMediaSourceFactory {
 
     public MediaSource fromDashManifestUrl(String dashManifestUrl) {
         return buildMediaSource(Uri.parse(dashManifestUrl), DASH_MANIFEST_EXTENSION);
+    }
+
+    // v21-dash-live spike: минимальный ANDROID player-запрос ради streamingData.dashManifestUrl.
+    // Контекст 1:1 как в Constants.kt (ANDROID 21.26.364), ключ — тот же API_KEY_NEW.
+    // TODO(spike): при успехе перенести в экстрактор (InnertubeService) и кешировать на сессию.
+    @Nullable
+    private String fetchAndroidDashManifestUrl(@Nullable String videoId) {
+        if (TextUtils.isEmpty(videoId)) {
+            return null;
+        }
+        HttpURLConnection conn = null;
+        try {
+            conn = (HttpURLConnection) new URL(
+                    "https://youtubei.googleapis.com/youtubei/v1/player?key=AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8&prettyPrint=false&alt=json")
+                    .openConnection();
+            conn.setRequestMethod("POST");
+            conn.setConnectTimeout(4000);
+            conn.setReadTimeout(6000);
+            conn.setDoOutput(true);
+            conn.setRequestProperty("Content-Type", "application/json");
+            conn.setRequestProperty("User-Agent",
+                    "com.google.android.youtube/21.26.364 (Linux; U; Android 11) gzip");
+            String body = "{\"videoId\":\"" + videoId + "\",\"context\":{\"client\":{" +
+                    "\"clientName\":\"ANDROID\",\"clientVersion\":\"21.26.364\"," +
+                    "\"androidSdkVersion\":30,\"osName\":\"Android\",\"osVersion\":\"11\"," +
+                    "\"hl\":\"en\",\"gl\":\"US\"}}}";
+            byte[] bodyBytes = body.getBytes(StandardCharsets.UTF_8);
+            OutputStream os = conn.getOutputStream();
+            os.write(bodyBytes);
+            os.flush();
+            os.close();
+            if (conn.getResponseCode() != 200) {
+                Log.w(TAG, "fetchAndroidDashManifestUrl: HTTP %s", conn.getResponseCode());
+                return null;
+            }
+            InputStream is = conn.getInputStream();
+            ByteArrayOutputStream bos = new ByteArrayOutputStream();
+            byte[] buf = new byte[8192];
+            int n;
+            while ((n = is.read(buf)) != -1) {
+                bos.write(buf, 0, n);
+            }
+            is.close();
+            String json = new String(bos.toByteArray(), StandardCharsets.UTF_8);
+            org.json.JSONObject root = new org.json.JSONObject(json);
+            org.json.JSONObject streamingData = root.optJSONObject("streamingData");
+            String dashUrl = streamingData != null ? streamingData.optString("dashManifestUrl", null) : null;
+            Log.i(TAG, "fetchAndroidDashManifestUrl: videoId=%s, dashUrl=%s", videoId, !TextUtils.isEmpty(dashUrl));
+            return dashUrl;
+        } catch (Exception e) {
+            Log.w(TAG, "fetchAndroidDashManifestUrl failed: %s", e.getMessage());
+            return null;
+        } finally {
+            if (conn != null) {
+                conn.disconnect();
+            }
+        }
     }
 
     public MediaSource fromHlsPlaylist(String hlsPlaylist) {
@@ -216,6 +278,17 @@ public class ExoMediaSourceFactory {
             Log.i(TAG, "buildSabrMediaSource: live + dashManifestUrl — native DASH instead of SABR-UMP: %s",
                     formatInfo.getDashManifestUrl());
             return fromDashManifestUrl(formatInfo.getDashManifestUrl());
+        }
+        // v21-dash-live spike, шаг 2: у победителя dash-урла нет (dashUrl=false) — тянем его
+        // из ANDROID-ответа (curl 09-04: ANDROID для live отдаёт dashManifestUrl + sabr).
+        // Один POST на старт стрима; провал/таймаут — молча старый путь через SABR-UMP ниже.
+        if (durationMs == C.TIME_UNSET) {
+            String androidDashUrl = fetchAndroidDashManifestUrl(formatInfo.getVideoId());
+            if (!TextUtils.isEmpty(androidDashUrl)) {
+                Log.i(TAG, "buildSabrMediaSource: live + ANDROID dashManifestUrl — native DASH instead of SABR-UMP: %s",
+                        androidDashUrl);
+                return fromDashManifestUrl(androidDashUrl);
+            }
         }
         SabrManifest manifest = new SabrManifest(
                 formatInfo.getVideoId(),
