@@ -360,6 +360,20 @@ class SabrClient private constructor(
         }.minByOrNull { it.header.startMs }
     }
 
+    /** Скип вперёд при дырке в серии (не прыжок к голове): ближайший доступный сегмент
+     *  с startMs в [requested − EPS, requested + cap], берём САМЫЙ РАННИЙ (минимальный скип).
+     *  Назад дальше eps — НЕЛЬЗЯ (тот же зацикливание-фриз, что в findTimeMatch).
+     *  Уже отданный сегмент исключается. */
+    private fun findSkipMatch(format: InitializedFormat?, requestedTimeMs: Long, itag: Int, capMs: Long): Segment? {
+        val cached = format?.downloadedSegments?.values ?: return null
+        val lastServedSeq = lastReturnedSequenceByItag[itag]
+        return cached.filter {
+            it.sequenceNumber != lastServedSeq &&
+                it.header.startMs >= requestedTimeMs - SAME_TIME_EPS_MS &&
+                it.header.startMs <= requestedTimeMs + capMs
+        }.minByOrNull { it.header.startMs }
+    }
+
     /** Какой сегмент будет отдан для (itag, segment, requestedTimeMs): точный по sequence или
      *  forward тайм-матч. ChunkSource использует startMs как ДЕКЛАРИРОВАННОЕ время чанка, чтобы
      *  очередь совпадала с реальными сэмплами fMP4 (абсолютное медиа-время). */
@@ -546,7 +560,25 @@ class SabrClient private constructor(
                                     }
                                 }
                             }
-                            // 3) Последний шанс — ближайший к голове (live edge / reconnect в середине эфира).
+                            // 2b) v17: ограниченный скип вперёд (не прыжок к голове!). Очередь отливила
+                            // от фронта на 4–10с (медленный 299-й: roundtrip 3–5с за 2с медиа) — прыжок
+                            // к голове рвал декларируемые времена, loadPosition улетал за конец окна
+                            // таймлайна → seek к defaultPos → убитые in-flight → рестарт со старого →
+                            // снова фолбэк (seek-шторм раз в 1–2 мин, лог 09:00–09:01). Скип ≤10с держит
+                            // очередь внутри окна: следующий запрос бьёт в кэш, лок восстанавливается.
+                            if (seg == null) {
+                                val skip = findSkipMatch(fallbackFormat, requestedTime, itag, LIVE_SKIP_CAP_MS)
+                                if (skip != null) {
+                                    seg = fallbackFormat.getSegment(skip.sequenceNumber)
+                                    if (seg != null) {
+                                        Log.i(TAG, "live fallback skip: +${seg.header.startMs - requestedTime}ms seq=${seg.sequenceNumber} startMs=${seg.header.startMs} ~ requestedTime $requestedTime instead of $requestedSeq")
+                                    }
+                                }
+                            }
+                            // 3) Последний шанс — ближайший к голове. Только настоящий реконнект
+                            //    (дыра > LIVE_SKIP_CAP_MS): в обычном режиме сюда не доходим, иначе
+                            //    прыжок к голове запускает цикл «прыжок → loadPosition вне окна →
+                            //    seek → рестарт со старого» (см. 2b).
                             //    Уже отданный sequence исключаем — иначе отдадим тот же чанк повторно.
                             if (seg == null && headSeq != null) {
                                 val lastServedSeq = lastReturnedSequenceByItag[itag]
@@ -933,6 +965,9 @@ class SabrClient private constructor(
         /** v16: кап consumed-истории для cumulative bufferedRanges (~20 мин). */
         private const val CONSUMED_HIST_KEEP = 600L
         private const val CONSUMED_HIST_CAP = 1500
+        /** v17: кап скипа вперёд в фолбэке (мс). Дыры 4–10с — обычный режим отстающей
+         *  очереди, скипаем минимально; больше — только реконнект прыжком к голове. */
+        private const val LIVE_SKIP_CAP_MS = 10_000L
         /** максимальное расхождение по времени (мс) для тайм-матча вперёд — ~1.5 live-сегмента.
          *  Было 30_000: фолбэк молча отдавал чанк до 30с не от запрошенного места → рассинхрон.
          *  Было 12_500: кэш-матч подхватывал сегмент на 11с вперёд от запрошенного (лог 12:36:56:
