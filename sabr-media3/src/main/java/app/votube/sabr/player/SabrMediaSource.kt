@@ -81,6 +81,9 @@ class SabrMediaSource(
             // Слушаем голову эфира: как только сервер скажет где голова и окно DVR — обновляем таймлайн
             // чтобы плеер мог стартовать с live edge и перематывать назад к началу
             sabrClient.liveMetadataListener = { meta -> source.onLiveMetadata(meta) }
+            // v28: сбрасываем монитор факта качества — старые served-значения не должны
+            // переживать смену сорса (читатель в UI доверяет только свежим <30с).
+            SabrQualityMonitor.reset(manifest.videoId)
             return source
         }
 

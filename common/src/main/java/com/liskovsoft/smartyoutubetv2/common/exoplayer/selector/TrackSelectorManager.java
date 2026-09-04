@@ -891,7 +891,74 @@ public class TrackSelectorManager implements TrackSelectorCallback {
             return null;
         }
 
+        // v28: SABR-ABR двигается молча (updateSelectedTrack без событий + hysteresis-override
+        // holder'а) — selectedTrack застревает на стартовом треке (обычно 144p), и UI врёт.
+        // Подтягиваем метку к факту из SabrQualityMonitor. Ручной пин не трогаем.
+        if (rendererIndex == RENDERER_INDEX_VIDEO) {
+            syncSelectedTrackWithSabr(renderer);
+        }
+
         return renderer.selectedTrack;
+    }
+
+    /**
+     * v28: перемаркирует selected video-трек по фактически отдаваемому качеству SABR.
+     * No-op, если: монитор несвеж (>30с), высоты совпали, трек не найден, стоит ручной
+     * override пользователя, что-то пошло не так (UI никогда не должен упасть отсюда).
+     */
+    private void syncSelectedTrackWithSabr(Renderer renderer) {
+        try {
+            app.votube.sabr.player.SabrQualityMonitor monitor =
+                    app.votube.sabr.player.SabrQualityMonitor.INSTANCE;
+            if (!monitor.isFresh()) {
+                return;
+            }
+            MediaTrack selected = renderer.selectedTrack;
+            if (selected == null || selected.format == null) {
+                return;
+            }
+            int servedHeight = monitor.getVideoHeight();
+            if (servedHeight <= 0 || selected.format.height == servedHeight) {
+                return;
+            }
+            // Ручной выбор пользователя (selection override) — святое, не трогаем.
+            if (mTrackSelector != null && renderer.trackGroups != null
+                    && mTrackSelector.getParameters().getSelectionOverride(RENDERER_INDEX_VIDEO, renderer.trackGroups) != null) {
+                return;
+            }
+            // Ищем трек с отданной высотой (при равной высоте — ближе по ширине).
+            int servedWidth = monitor.getVideoWidth();
+            int bestGroup = -1, bestTrack = -1, bestWidthDiff = Integer.MAX_VALUE;
+            if (renderer.mediaTracks == null) {
+                return;
+            }
+            for (int groupIndex = 0; groupIndex < renderer.mediaTracks.length; groupIndex++) {
+                MediaTrack[] trackGroup = renderer.mediaTracks[groupIndex];
+                if (trackGroup == null) {
+                    continue;
+                }
+                for (int trackIndex = 0; trackIndex < trackGroup.length; trackIndex++) {
+                    MediaTrack candidate = trackGroup[trackIndex];
+                    if (candidate == null || candidate.format == null
+                            || candidate.format.height != servedHeight) {
+                        continue;
+                    }
+                    int widthDiff = servedWidth > 0 && candidate.format.width > 0
+                            ? Math.abs(candidate.format.width - servedWidth) : 0;
+                    if (widthDiff < bestWidthDiff) {
+                        bestWidthDiff = widthDiff;
+                        bestGroup = groupIndex;
+                        bestTrack = trackIndex;
+                    }
+                }
+            }
+            if (bestGroup != -1) {
+                setSelection(RENDERER_INDEX_VIDEO, bestGroup, bestTrack);
+                Log.d(TAG, "syncSelectedTrackWithSabr: re-marked to " + servedHeight + "p");
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "syncSelectedTrackWithSabr failed: " + e);
+        }
     }
 
     private boolean hasPlaybackGlitch(MediaTrack mediaTrack) {

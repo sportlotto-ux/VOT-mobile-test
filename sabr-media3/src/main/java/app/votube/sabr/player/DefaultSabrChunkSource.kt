@@ -89,6 +89,9 @@ class DefaultSabrChunkSource(
     private val isLive = manifest.durationMs == C.TIME_UNSET
     private var lastTrackSwitchMs: Long = 0L
     private var lastSelectedTrackIndex: Int = C.INDEX_UNSET
+    // v28: последний itag, отрепорченный в SabrQualityMonitor (факт для UI).
+    private var lastReportedVideoItag: Int = -1
+    private var lastReportedAudioItag: Int = -1
 
     // v9: гейт по остатку буфера (предложение пользователя: держать 15-30с,
     // подтаскивать каждые 5-7с по остатку, всегда знать голову эфира). <15с — тянуть
@@ -307,6 +310,26 @@ class DefaultSabrChunkSource(
             representationHolder = representationHolders[trackSelection.selectedIndex]
             sabrClient.selectFormat(representationHolder.representation)
         }
+
+        // v28: стартовое качество live — 360/480 вместо 144p (Exo стартует с нижней оценки
+        // пропускной способности). Берём максимальную высоту <=480; дальше ABR с реальными
+        // замерами сам поднимется. Только первый чанк (previousChunk==null, очередь пуста).
+        if (isLive && trackType == C.TRACK_TYPE_VIDEO && previousChunk == null && queue.isEmpty()) {
+            val initialIdx = selectInitialLiveHolderIndex()
+            if (initialIdx != -1 && representationHolders[initialIdx] !== representationHolder) {
+                representationHolder = representationHolders[initialIdx]
+                val rep = representationHolder.representation
+                android.util.Log.i(
+                    "SabrChunkSource",
+                    "live initial quality: holder idx=$initialIdx, " +
+                        "itag=${rep.streamInfo.itag}, ${rep.width}x${rep.height} " +
+                        "(selector was idx=${trackSelection.selectedIndex})"
+                )
+            }
+        }
+        // v28: репортим ФАКТИЧЕСКИ отданный holder в монитор — UI (диалог качества,
+        // stats) показывает реальность, а не замороженный стартовый selectedIndex.
+        reportServedQuality(representationHolder)
 
         if (representationHolder.chunkIndex == null) {
             // SABR is server-driven: the container index is only built once media fragments
@@ -927,6 +950,54 @@ class DefaultSabrChunkSource(
         override fun getChunkEndTimeUs(): Long {
             checkInBounds()
             return representationHolder.getSegmentEndTimeUs(currentIndex)
+        }
+    }
+
+    // v28: стартовый holder live — максимальная высота <= 480, иначе минимальная высота.
+    // Возвращает индекс в representationHolders или -1 (не live / не видео / один трек).
+    private fun selectInitialLiveHolderIndex(): Int {
+        if (representationHolders.size < 2) {
+            return -1
+        }
+        var bestUnder = -1
+        var bestUnderH = -1
+        var lowest = 0
+        var lowestH = Int.MAX_VALUE
+        for (i in representationHolders.indices) {
+            val h = representationHolders[i].representation.height ?: continue
+            if (h <= 480 && h > bestUnderH) {
+                bestUnderH = h
+                bestUnder = i
+            }
+            if (h < lowestH) {
+                lowestH = h
+                lowest = i
+            }
+        }
+        return if (bestUnder != -1) bestUnder else lowest
+    }
+
+    // v28: репорт фактически отданного holder'а в монитор (UI показывает реальность).
+    // Метка свежести обновляется каждый чанк, смена itag — в лог.
+    private fun reportServedQuality(holder: RepresentationHolder) {
+        val rep = holder.representation
+        if (trackType == C.TRACK_TYPE_VIDEO) {
+            val itag = rep.streamInfo.itag
+            SabrQualityMonitor.onVideoServed(manifest.videoId, itag, rep.width ?: -1, rep.height ?: -1)
+            if (itag != lastReportedVideoItag) {
+                lastReportedVideoItag = itag
+                android.util.Log.i(
+                    "SabrChunkSource",
+                    "served quality: video itag=$itag ${rep.width}x${rep.height}"
+                )
+            }
+        } else if (trackType == C.TRACK_TYPE_AUDIO) {
+            val itag = rep.streamInfo.itag
+            SabrQualityMonitor.onAudioServed(manifest.videoId, itag)
+            if (itag != lastReportedAudioItag) {
+                lastReportedAudioItag = itag
+                android.util.Log.i("SabrChunkSource", "served quality: audio itag=$itag")
+            }
         }
     }
 
