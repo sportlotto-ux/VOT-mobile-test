@@ -195,8 +195,9 @@ public class ExoMediaSourceFactory {
         int adaptiveFormatCount = formatInfo.getAdaptiveFormats() != null
                 ? formatInfo.getAdaptiveFormats().size() : -1;
 
-        Log.i(TAG, "SABR selection: url=%s, config=%s, adaptiveFormats=%s",
-                hasSabrUrl, hasSabrConfig, adaptiveFormatCount);
+        Log.i(TAG, "SABR selection: videoId=%s, url=%s, config=%s, adaptiveFormats=%s, dashUrl=%s",
+                formatInfo.getVideoId(), hasSabrUrl, hasSabrConfig, adaptiveFormatCount,
+                !TextUtils.isEmpty(formatInfo.getDashManifestUrl()));
 
         if (!hasSabrUrl || !hasSabrConfig) {
             Log.w(TAG, "buildSabrMediaSource: SABR data is missing, falling back to DASH");

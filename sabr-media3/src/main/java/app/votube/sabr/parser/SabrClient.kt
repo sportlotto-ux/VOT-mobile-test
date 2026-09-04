@@ -286,13 +286,13 @@ class SabrClient private constructor(
     fun getMinSeekableTimeMs(): Long? = withState {
         liveMetadata?.let {
             if (it.hasMinSeekableTimeTicks() && it.hasMinSeekableTimescale() && it.minSeekableTimescale != 0)
-                it.minSeekableTimeTicks * 1000L / it.minSeekableTimescale else null
+                ticksToMs(it.minSeekableTimeTicks, it.minSeekableTimescale) else null
         }
     }
     fun getMaxSeekableTimeMs(): Long? = withState {
         liveMetadata?.let {
             if (it.hasMaxSeekableTimeTicks() && it.hasMaxSeekableTimescale() && it.maxSeekableTimescale != 0)
-                it.maxSeekableTimeTicks * 1000L / it.maxSeekableTimescale else null
+                ticksToMs(it.maxSeekableTimeTicks, it.maxSeekableTimescale) else null
         }
     }
     /** consume SABR_SEEK once so caller can apply it and we don't reuse stale value */
@@ -307,7 +307,7 @@ class SabrClient private constructor(
         if (head == null) return@withState null
         val start = liveWindowStartMs ?: liveMetadata?.let {
             if (it.hasMinSeekableTimeTicks() && it.hasMinSeekableTimescale() && it.minSeekableTimescale != 0)
-                it.minSeekableTimeTicks * 1000L / it.minSeekableTimescale else 0L
+                ticksToMs(it.minSeekableTimeTicks, it.minSeekableTimescale) else 0L
         } ?: 0L
         (head - start).takeIf { it > 0 }
     }
@@ -750,7 +750,7 @@ class SabrClient private constructor(
                     val durationMs = when {
                         header.hasDurationMs() -> header.durationMs
                         header.hasTimeRange() && header.timeRange.hasDurationTicks() && header.timeRange.hasTimescale() && header.timeRange.timescale != 0 ->
-                            header.timeRange.durationTicks * 1000L / header.timeRange.timescale
+                            ticksToMs(header.timeRange.durationTicks, header.timeRange.timescale)
                         header.hasStartMs() && liveMetadata != null -> 2000L // live estimate = реальный шаг эфира 2с (v9: 4900→2000, иначе очередь 5с vs шаг 2с → virtual buffer)
                         else -> 0L
                     }
@@ -837,7 +837,7 @@ class SabrClient private constructor(
                     if (liveWindowStartMs == null) {
                         liveWindowStartMs = meta.takeIf {
                             it.hasMinSeekableTimeTicks() && it.hasMinSeekableTimescale() && it.minSeekableTimescale != 0
-                        }?.let { it.minSeekableTimeTicks * 1000L / it.minSeekableTimescale } ?: 0L
+                        }?.let { ticksToMs(it.minSeekableTimeTicks, it.minSeekableTimescale) } ?: 0L
                     }
                     Log.i(TAG, "live metadata: headSeq=${meta.headSequenceNumber}, headTimeMs=${meta.headTimeMs}, broadcastId=${meta.broadcastId}, minSeekTicks=${if (meta.hasMinSeekableTimeTicks()) meta.minSeekableTimeTicks else "null"}, windowStartMs=$liveWindowStartMs")
                     liveMeta = meta
@@ -845,7 +845,9 @@ class SabrClient private constructor(
                 UMPPartId.SABR_SEEK -> {
                     val seek = SabrSeek.parseFrom(part.data)
                     if (seek.hasSeekMediaTime() && seek.hasSeekMediaTimescale() && seek.seekMediaTimescale > 0) {
-                        serverSeekTimeMs = seek.seekMediaTime * 1000 / seek.seekMediaTimescale
+                        // v20: ticks*1000 переполняет даже Long при ns-timescale
+                        // (1.1e16*1000=1.1e19 > 9.2e18 → positionMs уходил в минус, лог 09:48:43).
+                        serverSeekTimeMs = ticksToMs(seek.seekMediaTime, seek.seekMediaTimescale)
                         Log.i(TAG, "server seek: positionMs=$serverSeekTimeMs, " +
                             "mediaTime=${seek.seekMediaTime}, timescale=${seek.seekMediaTimescale}")
                     }
@@ -945,6 +947,11 @@ class SabrClient private constructor(
 
     fun generatePoToken(): ByteString? =
         poTokenProvider?.getStreamingPoToken(videoId)?.let { ByteString.copyFrom(it) }
+
+    /** Точный перевод ticks→ms без переполнения: сначала деление, остаток — отдельно.
+     *  Прямое ticks*1000 вылетает за Long при ns-timescale (лог 09:48:43). */
+    private fun ticksToMs(ticks: Long, timescale: Long): Long =
+        if (timescale <= 0) 0L else ticks / timescale * 1000 + (ticks % timescale) * 1000 / timescale
 
     companion object {
         private const val TAG = "SabrStream"
