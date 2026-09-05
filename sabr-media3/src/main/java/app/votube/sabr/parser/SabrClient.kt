@@ -410,6 +410,19 @@ class SabrClient private constructor(
         value?.takeIf { it >= 0 }
     }
 
+    /**
+     * v36: серверный таргет отставания от головы (targetVideoReadaheadMs, иначе targetAudio).
+     * Exo тянется за ним через window.liveConfiguration на каждый refresh — без пересборки сорса.
+     * null — политики ещё нет (старт): используется статический таргет.
+     */
+    fun getLiveTargetOffsetMs(): Long? = withState {
+        val policy = nextRequestPolicy ?: return@withState null
+        val video = if (policy.hasTargetVideoReadaheadMs()) policy.targetVideoReadaheadMs else -1
+        val audio = if (policy.hasTargetAudioReadaheadMs()) policy.targetAudioReadaheadMs else -1
+        val best = maxOf(video, audio)
+        if (best > 0) best.toLong() else null
+    }
+
     /** Только текущие треки (как у референса googlevideo/SabrStreamingAdapter).
      *  Отвалившиеся itag серверу не предлагаем — иначе он досыпает за них пачками
      *  (лог: newSegs=6 по 4.4МБ) и рвёт временные якоря. До первой инициализации —

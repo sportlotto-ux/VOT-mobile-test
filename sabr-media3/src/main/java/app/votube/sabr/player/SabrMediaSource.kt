@@ -116,7 +116,10 @@ class SabrMediaSource(
         если пользователь вручную выставил не-1x (условие playbackParameters.speed==1f). */
     private val liveConfiguration: MediaItem.LiveConfiguration =
         MediaItem.LiveConfiguration.Builder()
-            .setTargetOffsetMs(15000)
+            // v35: target 15с → 22с — в зону серверного таргета (next request policy просит
+            // readahead 22-50с; на 15с медленные стримы отвечают пустыми 165Б). В паре с
+            // app-сторожем 30с/35с (VideoStateController) и SABR-стартом −30с: единая зона.
+            .setTargetOffsetMs(22000)
             .setMinOffsetMs(12000)
             .setMaxOffsetMs(60000)
             .setMinPlaybackSpeed(1.0f)
@@ -219,6 +222,17 @@ class SabrMediaSource(
             if (isLive && windowDuration != C.TIME_UNSET && windowDuration > 0)
                 System.currentTimeMillis() - Util.usToMs(windowDuration)
             else C.TIME_UNSET
+        // v36: таргет отставания — от сервера (next request policy), а не статика: сервер
+        // двигает его 22с→50с по состоянию стрима, Exo подхватывает через окно на каждый
+        // refresh (DefaultLivePlaybackSpeedControl читает liveConfiguration окна живьём).
+        // Нет политики (старт) — статический v35 (22с). Кламп: не ближе 15с к краю
+        // (зона пустых ответов) и не дальше 45с (maxOffset 60с обязан быть выше таргета).
+        val serverTargetMs = if (isLive) sabrClient.getLiveTargetOffsetMs() else null
+        val liveConfig = if (serverTargetMs != null) MediaItem.LiveConfiguration.Builder()
+            .setTargetOffsetMs(serverTargetMs.coerceIn(15000, 45000))
+            .setMinOffsetMs(12000)
+            .setMaxOffsetMs(60000)
+            .build() else liveConfiguration
         val timeline =
             SabrTimeline(
                 C.TIME_UNSET,
@@ -227,7 +241,7 @@ class SabrMediaSource(
                 windowStartUs,
                 windowDuration,
                 defaultPos,
-                liveConfiguration,
+                liveConfig,
                 manifest,
                 mediaItem,
             )

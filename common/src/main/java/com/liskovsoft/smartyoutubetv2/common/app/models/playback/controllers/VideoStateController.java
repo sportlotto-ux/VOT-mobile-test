@@ -25,7 +25,14 @@ public class VideoStateController extends BasePlayerController {
     private static final long MUSIC_VIDEO_MAX_DURATION_MS = 6 * 60 * 1000;
     private static final long RESTORE_LIVE_BUFFER_MS = 60_000;
     private static final long DEFAULT_LIVE_BUFFER_MS = 60_000; // Minimum issues
-    private static final long OFFICIAL_LIVE_BUFFER_MS = 15_000; // Official app buffer
+    // v35 (votube-media3, SABR-live): 15с → 30с. Сервер просит держать readahead 22-50с
+    // (targetAudio/Video из next request policy), а сторож «isBehindActualLive» с порогом
+    // 20с тащил всё назад к голове−15с — в зону, где у медленных стримов ещё нет сегментов.
+    // Итог: seek → фlush буфера → запросы в пустоту → stall → снова seek (лог 13:51-13:53:
+    // seek'и +5/+15с к голове каждые ~10-90с). Теперь: терпим лаг до 35с (getLiveThreshold),
+    // восстановление — к голове−30с (безопасная зона с гарантированными сегментами),
+    // в паре с Exo targetOffset 22с и SABR-стартом −30с. Только live-ветки (isLive-гейты).
+    private static final long OFFICIAL_LIVE_BUFFER_MS = 30_000; // Official app buffer was 15_000
     private static final long LIVE_BUFFER_MS = OFFICIAL_LIVE_BUFFER_MS;
     private static final long SHORT_LIVE_BUFFER_MS = 0; // Note, on buffer lower than the 60sec you'll notice segment skip
     private static final long BEGIN_THRESHOLD_MS = 10_000;
