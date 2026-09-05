@@ -24,6 +24,7 @@ object SabrSessionStats {
     private val servedVideo = AtomicLong()
     private val servedAudio = AtomicLong()
     private val noSegment = AtomicLong()
+    private val gapWaits = AtomicLong()
     private val propagateNoFallback = AtomicLong()
     private val propagateDeclined = AtomicLong()
     private val fallbackSkip = AtomicLong()
@@ -43,6 +44,7 @@ object SabrSessionStats {
         servedVideo.set(0)
         servedAudio.set(0)
         noSegment.set(0)
+        gapWaits.set(0)
         propagateNoFallback.set(0)
         propagateDeclined.set(0)
         fallbackSkip.set(0)
@@ -55,6 +57,8 @@ object SabrSessionStats {
     fun onVideoServed() { servedVideo.incrementAndGet(); maybeSummary() }
     fun onAudioServed() { servedAudio.incrementAndGet(); maybeSummary() }
     fun onNoSegment() { noSegment.incrementAndGet(); maybeSummary() }
+    // v34: ожидание головы внутри open() (500мс-кванты, без лога — только счётчик).
+    fun onGapWait() { gapWaits.incrementAndGet() }
     fun onPropagateNoFallback() { propagateNoFallback.incrementAndGet(); maybeSummary() }
     fun onPropagateDeclined() { propagateDeclined.incrementAndGet(); maybeSummary() }
     fun onFallbackSkip(skippedMs: Long) {
@@ -82,7 +86,7 @@ object SabrSessionStats {
     private fun summary(): String {
         val secs = (SystemClock.elapsedRealtime() - sessionStartMs) / 1000
         return "+${secs}s servedV=${servedVideo.get()} servedA=${servedAudio.get()} " +
-            "noSegment=${noSegment.get()} " +
+            "noSegment=${noSegment.get()} (gapWait=${gapWaits.get()}) " +
             "propagate=${propagateNoFallback.get()}+${propagateDeclined.get()}declined " +
             "fallbackSkip=${fallbackSkip.get()}(${fallbackSkipMs.get()}ms) " +
             "nearestHead=${nearestHead.get()} " +

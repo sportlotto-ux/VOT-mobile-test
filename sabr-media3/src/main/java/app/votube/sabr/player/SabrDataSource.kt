@@ -11,7 +11,9 @@ import androidx.media3.datasource.DataSpec
 import app.votube.sabr.parser.CompositeBuffer
 import app.votube.sabr.parser.PlaybackRequest
 import app.votube.sabr.parser.SabrClient
+import app.votube.sabr.parser.Segment
 import java.io.IOException
+import java.io.InterruptedIOException
 
 @OptIn(UnstableApi::class)
 class SabrDataSource(
@@ -40,6 +42,18 @@ class SabrDataSource(
         override fun createDataSource(): DataSource = SabrDataSource(sabrClient)
     }
 
+    companion object {
+        // v34: толерантность к дырам головы live. «Нет сегмента» считаем transient и ждём
+        // внутри open() (бюджетом), а не бросаем мгновенно в Exo: каждый мисс раньше шёл
+        // в propagate → бэкофф лоадеров Exo рос → треки умирали поодиночке и не воскресали
+        // (лог 13:13: servedA встал на 55 за минуту до смерти всего стрима). Фатальные
+        // ошибки (исключения) пробрасываем сразу; VOD ждёт тоже 0 (там мисс — не transient).
+        // Отмена (seek/стоп) прилетает прерыванием — выходим мгновенно через
+        // InterruptedIOException (Exo понимает его как cancel, не как ошибку).
+        private const val GAP_TOLERANCE_MS = 8000L
+        private const val GAP_WAIT_STEP_MS = 500L
+    }
+
     override fun open(dataSpec: DataSpec): Long {
         val playbackRequest = dataSpec.customData as? PlaybackRequest
             ?: throw IOException("SABR data source requires PlaybackRequest")
@@ -59,10 +73,35 @@ class SabrDataSource(
         transferInitializing(dataSpec)
         transferStarted(dataSpec)
         // Тег SABR-стрима, а не имя класса: иначе ошибки не видно под -s SabrStream:V.
+        val openStartMs = android.os.SystemClock.elapsedRealtime()
+        var gapLogged = false
         val segment = try {
-            sabrClient.getNextSegment(playbackRequest)
-                ?: throw IOException("SABR returned no segment ${playbackRequest.segment} for ${playbackRequest.format.itag}")
-                    .also { SabrSessionStats.onNoSegment() }
+            var result: Segment? = null
+            while (result == null) {
+                result = sabrClient.getNextSegment(playbackRequest)
+                if (result == null) {
+                    // VOD-мисс — сразу наружу (там это не transient).
+                    // Live-мисс в пределах бюджета — спим и переспрашиваем.
+                    val elapsed = android.os.SystemClock.elapsedRealtime() - openStartMs
+                    if (!sabrClient.isLive() || elapsed >= GAP_TOLERANCE_MS) {
+                        SabrSessionStats.onNoSegment()
+                        throw IOException("SABR returned no segment ${playbackRequest.segment} for ${playbackRequest.format.itag}")
+                    }
+                    if (!gapLogged) {
+                        gapLogged = true
+                        Log.w("SabrStream",
+                            "live gap: waiting for segment ${playbackRequest.segment} " +
+                                "(timeMs=${playbackRequest.segmentStartTimeMs}) for ${playbackRequest.format.itag}")
+                    }
+                    SabrSessionStats.onGapWait()
+                    try {
+                        Thread.sleep(GAP_WAIT_STEP_MS)
+                    } catch (e: InterruptedException) {
+                        throw InterruptedIOException("SABR open cancelled while waiting for segment")
+                    }
+                }
+            }
+            result
         } catch (e: IOException) {
             Log.e(
                 "SabrStream",
