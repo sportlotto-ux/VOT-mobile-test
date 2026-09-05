@@ -202,6 +202,12 @@ class SabrClient private constructor(
     /** флаг что live уже стартовал с головы — нужен чтобы отличить начальный edge от DVR rewind к началу */
     var hasStartedLive: Boolean = false
     private var lastRequestMs: Long? = null
+    /** v44.3: последний запрошенный (itag, seq) + время — троттл циклических переспросов
+     *  одного отсутствующего куска (лог 19:58: attempt=2→0→1→2→0 по кругу = 3 HTTP
+     *  на каждый промах с каждого трека). Под локом (две полосы). */
+    private var lastMediaReqItag = -1
+    private var lastMediaReqSeq = -1L
+    private var lastMediaReqMs = 0L
     /** Момент последнего пустого media-ответа (0 новых сегментов): следующие запросы
      *  тормозим EMPTY_BACKOFF_MS, иначе спин 169Б по 8 req/s (лог 22:02:23, 22:04:57). */
     private var lastMediaEmptyMs: Long = 0L
@@ -402,6 +408,19 @@ class SabrClient private constructor(
         f?.downloadedSegments?.values?.forEach { points[it.header.startMs] = it.sequenceNumber }
         f?.bufferedSegments?.values?.forEach { points[it.header.startMs] = it.sequenceNumber }
         SabrSegmentMatcher.estimateSeqForTimeMs(points, realStepMsByItag[itag], timeMs)
+    }
+
+    /** v44.2: скользящее окно событий дыр (hole-skip/void-прыжки) для адаптивной глубины.
+     *  Рваный эфир = ≥4 дыры за 2 мин → отъезжаем от головы (45с), чистый → сидим у края. */
+    private val holeEventMs = ArrayDeque<Long>()
+    private fun noteHoleEvent() = withState {
+        val now = SystemClock.elapsedRealtime()
+        holeEventMs.addLast(now)
+        while (holeEventMs.size > 12) holeEventMs.removeFirst()
+    }
+    fun isStreamHoley(): Boolean = withState {
+        val now = SystemClock.elapsedRealtime()
+        holeEventMs.count { now - it < 120_000 } >= 4
     }
 
     /** Какой сегмент будет отдан для (itag, segment, requestedTimeMs): точный по sequence или
@@ -623,6 +642,7 @@ class SabrClient private constructor(
                                     if (seg != null) {
                                         Log.i(TAG, "live fallback skip: +${seg.header.startMs - requestedTime}ms seq=${seg.sequenceNumber} startMs=${seg.header.startMs} ~ requestedTime $requestedTime instead of $requestedSeq")
                                         SabrSessionStats.onFallbackSkip(seg.header.startMs - requestedTime)
+                                        noteHoleEvent()
                                     }
                                 }
                             }
@@ -675,6 +695,7 @@ class SabrClient private constructor(
                                         } else if (jumpMs > 30_000) {
                                             Log.i(TAG, "live void jump: +${jumpMs}ms seq=$nearestHead startMs=${seg.header.startMs} ~ requestedTime $requestedTime (head $headSeq)")
                                             SabrSessionStats.onFallbackSkip(jumpMs)
+                                            noteHoleEvent()
                                         } else {
                                             seg = null
                                         }
@@ -714,6 +735,7 @@ class SabrClient private constructor(
                     } else if (headSeqNow != null && headSeqNow > playbackRequest.segment) {
                         Log.w(TAG, "live hole skip: itag=$itag seq=${playbackRequest.segment} missing, head=$headSeqNow — re-anchor and retry once")
                         SabrSessionStats.onHoleSkipAttempt()
+                        noteHoleEvent()
                         withState {
                             lastReturnedSequenceByItag[itag] = headSeqNow - 1
                             if (headTimeNow != null) {
@@ -832,6 +854,7 @@ class SabrClient private constructor(
     }
 
     private suspend fun media(playbackRequest: PlaybackRequest) {
+        val itag = playbackRequest.format.itag
         // Ревью второй полосы: take под локом (запись в processPart уже под withState).
         // Иначе prefetch съедал серверный backoff реального запроса (и наоборот) —
         // сервер сказал ждать, а мы шли сразу.
@@ -843,6 +866,23 @@ class SabrClient private constructor(
         if (lastMediaEmptyMs > 0 && sinceEmpty0 < EMPTY_BACKOFF_MS) {
             delay(EMPTY_BACKOFF_MS - sinceEmpty0)
         }
+        // v44.3: тот же (itag, seq) чаще раза в ритм не переспрашиваем — Exo крутит
+        // getNextSegment по кругу на отсутствующем куске, каждый круг = 3 HTTP.
+        // Prefetch (другой seq) не страдает. Легитимный повтор после seek подождёт ≤1 ритм.
+        val sameSeqWaitMs = withState {
+            val now = SystemClock.elapsedRealtime()
+            val step = realStepMsByItag[itag] ?: 2000L
+            if (lastMediaReqItag == itag && lastMediaReqSeq == playbackRequest.segment &&
+                now - lastMediaReqMs < step) {
+                step - (now - lastMediaReqMs)
+            } else {
+                lastMediaReqItag = itag
+                lastMediaReqSeq = playbackRequest.segment
+                lastMediaReqMs = now
+                0L
+            }
+        }
+        if (sameSeqWaitMs > 0) delay(sameSeqWaitMs)
         mediaStoredCounter = 0
         val now = SystemClock.elapsedRealtime()
         // Снимок состояния под локом: формат/контексты мутируются из других loader-потоков

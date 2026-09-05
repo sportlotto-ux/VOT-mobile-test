@@ -192,15 +192,28 @@ class DefaultSabrChunkSource(
         }
         val cancel = trackSelection.shouldCancelChunkLoad(playbackPositionUs, loadingChunk, queue)
         if (cancel && isLive) {
-            // Live SABR: отмена почти докачанного чанка (3-6МБ) = выброшенные мегабайты +
-            // сброс очереди (resume@0) + догон-пачка. Дешевле докачать: следующий чанк и так
-            // возьмём в новом качестве. Seek отменяет загрузки иначе (напрямую), его не трогаем.
+            // v44.1: упреждающий даунгрейд. Раньше давили ВСЕ отмены — толстый кусок
+            // 1080p на тонком линке тянулся до конца, очередь отставала от плеера,
+            // catch-up рвал позицию метрономом +5с (лог 19:58). Теперь отмены Exo
+            // (он уже посчитал что чанк не успеет) слушаемся на тонком буфере (<12с):
+            // скачанное хранит копия v31, следующий чанк возьмём ниже. На здоровом
+            // буфере докачиваем — отмена ради экономии бессмысленна. Seek отменяет
+            // загрузки иначе (напрямую), его не трогаем.
+            val queueEndUs = queue.lastOrNull()?.endTimeUs ?: playbackPositionUs
+            val bufferedMs = (queueEndUs - playbackPositionUs) / 1000
             val req = loadingChunk.dataSpec.customData as? PlaybackRequest
+            if (bufferedMs >= 12_000) {
+                android.util.Log.w(
+                    "SabrChunkSource",
+                    "ABR cancel suppressed (live, buf=${bufferedMs}ms): itag=${req?.format?.itag}, seq=${req?.segment}"
+                )
+                return false
+            }
             android.util.Log.w(
                 "SabrChunkSource",
-                "ABR cancel suppressed (live): itag=${req?.format?.itag}, seq=${req?.segment}"
+                "ABR cancel allowed (thin buf=${bufferedMs}ms): itag=${req?.format?.itag}, seq=${req?.segment}"
             )
-            return false
+            return true
         }
         return cancel
     }

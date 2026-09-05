@@ -227,12 +227,20 @@ class SabrMediaSource(
         // двигает его 22с→50с по состоянию стрима, Exo подхватывает через окно на каждый
         // refresh (DefaultLivePlaybackSpeedControl читает liveConfiguration окна живьём).
         // Нет политики (старт) — статический v35 (22с). Кламп 15–30с: потолок обязан быть
-        // НИЖЕ порога app-сторожа 35с (VideoStateController), иначе сторож будет стаскивать
-        // позицию с серверного −45с назад на −30с по кругу (лог 15:14 на 199-й).
+        // НИЖЕ порога app-сторожа (VideoStateController.getLiveThreshold), иначе сторож
+        // будет стаскивать позицию с серверного −45с назад на −30с по кругу (лог 15:14
+        // на 199-й). Аудит v44 верно заметил конфликт 45с vs 35с — но сторож сейчас
+        // 600с (v41-test), драки нет. ПРАВИЛО СПАРКИ для прод-режима задержки:
+        // targetOffsetMs ≤ терпение_сторожа − 15с. holeyBackoff=45с доминирует над
+        // серверным осознанно: на рваных серверные 22-30с и есть проблема.
         // Не ближе 15с к краю (зона пустых ответов).
         val serverTargetMs = if (isLive) sabrClient.getLiveTargetOffsetMs() else null
+        // v44.2: адаптивная глубина. Рваный эфир (≥4 дыры за 2 мин) — отъезжаем от головы
+        // на 45с и пересиживаем мелкие дыры буфером вместо прыжков; чистый — сидим у края.
+        // Потолок maxOffset (600с тест / 60с прод) и терпение сторожа заведомо выше.
+        val holeyBackoffMs = if (isLive && sabrClient.isStreamHoley()) 45_000L else 0L
         val liveConfig = if (serverTargetMs != null) MediaItem.LiveConfiguration.Builder()
-            .setTargetOffsetMs(serverTargetMs.coerceIn(15000, 30000))
+            .setTargetOffsetMs(maxOf(serverTargetMs.coerceIn(15000, 30000), holeyBackoffMs))
             .setMinOffsetMs(12000)
             // v41-test: потолок 600с (эксперимент «тёплый кеш»). Вернуть 60000/параметризовать!
             .setMaxOffsetMs(600000)
