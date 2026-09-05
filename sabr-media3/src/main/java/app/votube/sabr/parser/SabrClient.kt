@@ -380,6 +380,39 @@ class SabrClient private constructor(
         }.minByOrNull { it.header.startMs }
     }
 
+    /** v43.1: индекс время→seq (DASH-дисциплина вместо арифметики headSeq−offset/est).
+     *  База: consumed-история (~20 мин, переживает эвикцию) + живые карты формата.
+     *  Точное попадание → seq; иначе интерполяция внутри известной скобки соседей
+     *  (ошибка ограничена скобкой — строго лучше unbounded head-арифметики).
+     *  За краями известного — null, вызывающий падает на старую арифметику.
+     *  Никогда не гадаем наружу: экстраполяция за край — источник «примерно 542». */
+    fun estimateSeqForTimeMs(itag: Int, timeMs: Long): Long? = withState {
+        val f = initializedFormats[itag]
+        val points = mutableMapOf<Long, Long>() // startMs -> seq
+        consumedSegsByItag[itag]?.forEach { (seq, ts) -> points[ts.first] = seq }
+        f?.downloadedSegments?.values?.forEach { points[it.header.startMs] = it.sequenceNumber }
+        f?.bufferedSegments?.values?.forEach { points[it.header.startMs] = it.sequenceNumber }
+        if (points.isEmpty()) return@withState null
+        points[timeMs]?.let { return@withState it }
+        val sorted = points.keys.sorted()
+        val lower = sorted.lastOrNull { it <= timeMs }
+        val upper = sorted.firstOrNull { it >= timeMs }
+        if (lower != null && upper != null && upper > lower) {
+            val lowerSeq = points[lower] ?: return@withState null
+            val upperSeq = points[upper] ?: return@withState null
+            if (upperSeq > lowerSeq) {
+                val stepMs = realStepMsByItag[itag] ?: 2000L
+                if (stepMs > 0) {
+                    val est = lowerSeq + (timeMs - lower) / stepMs
+                    if (est in lowerSeq..upperSeq) return@withState est
+                }
+            }
+            // Скобка вырождена (перенумерация) — ближайший сосед по времени.
+            return@withState if (timeMs - lower <= upper - timeMs) lowerSeq else upperSeq
+        }
+        null
+    }
+
     /** Какой сегмент будет отдан для (itag, segment, requestedTimeMs): точный по sequence или
      *  forward тайм-матч. ChunkSource использует startMs как ДЕКЛАРИРОВАННОЕ время чанка, чтобы
      *  очередь совпадала с реальными сэмплами fMP4 (абсолютное медиа-время). */
@@ -679,10 +712,19 @@ class SabrClient private constructor(
                 if (liveMetadata != null) {
                     val headSeqNow = withState { liveMetadata?.headSequenceNumber }
                     val headTimeNow = withState { liveMetadata?.headTimeMs }
-                    if (headSeqNow != null && headSeqNow > playbackRequest.segment) {
+                    val stepMs = withState { getLastRealStepMs(itag) } ?: 2000L
+                    // v43.2: DASH-терпение. Запрос у самой головы (кусок ещё не сгенерился) —
+                    // НЕ ре-якорим мгновенно: propagate ниже подождёт backoff'ом, long-poll
+                    // привезёт кусок. Ре-якорь — только когда запрос глубоко позади головы
+                    // (настоящая дыра под ногами). Иначе каждый тик у края дёргал якоря
+                    // и плодил «re-anchor and retry» на здоровом эфире.
+                    val notYet = headTimeNow != null &&
+                        headTimeNow - playbackRequest.segmentStartTimeMs <= maxOf(2 * stepMs, 4000L)
+                    if (notYet) {
+                        Log.i(TAG, "live not-yet: itag=$itag seq=${playbackRequest.segment} requestedTime=${playbackRequest.segmentStartTimeMs} head=$headSeqNow/$headTimeNow — wait for generation, no re-anchor")
+                    } else if (headSeqNow != null && headSeqNow > playbackRequest.segment) {
                         Log.w(TAG, "live hole skip: itag=$itag seq=${playbackRequest.segment} missing, head=$headSeqNow — re-anchor and retry once")
                         SabrSessionStats.onHoleSkipAttempt()
-                        val stepMs = withState { getLastRealStepMs(itag) } ?: 2000L
                         withState {
                             lastReturnedSequenceByItag[itag] = headSeqNow - 1
                             if (headTimeNow != null) {
