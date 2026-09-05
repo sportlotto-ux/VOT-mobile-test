@@ -885,6 +885,7 @@ class DefaultSabrChunkSource(
             && !fallbackOptions.isFallbackAvailable(LoadErrorHandlingPolicy.FALLBACK_TYPE_LOCATION)
         ) {
             android.util.Log.w("SabrChunkSource", "chunk load error: no fallback available — propagate")
+            SabrSessionStats.onPropagateNoFallback()
             return false
         }
         val fallbackSelection =
@@ -892,6 +893,7 @@ class DefaultSabrChunkSource(
         if (fallbackSelection == null || !fallbackOptions.isFallbackAvailable(fallbackSelection.type)) {
             // Policy indicated to not use any fallback or a fallback type that is not available.
             android.util.Log.w("SabrChunkSource", "chunk load error: policy declined fallback — propagate")
+            SabrSessionStats.onPropagateDeclined()
             return false
         }
 
@@ -987,6 +989,7 @@ class DefaultSabrChunkSource(
         if (trackType == C.TRACK_TYPE_VIDEO) {
             val itag = rep.streamInfo.itag
             SabrQualityMonitor.onVideoServed(manifest.videoId, itag, rep.format.width, rep.format.height)
+            SabrSessionStats.onVideoServed()
             if (itag != lastReportedVideoItag) {
                 lastReportedVideoItag = itag
                 android.util.Log.i(
@@ -997,6 +1000,7 @@ class DefaultSabrChunkSource(
         } else if (trackType == C.TRACK_TYPE_AUDIO) {
             val itag = rep.streamInfo.itag
             SabrQualityMonitor.onAudioServed(manifest.videoId, itag)
+            SabrSessionStats.onAudioServed()
             if (itag != lastReportedAudioItag) {
                 lastReportedAudioItag = itag
                 android.util.Log.i("SabrChunkSource", "served quality: audio itag=$itag")

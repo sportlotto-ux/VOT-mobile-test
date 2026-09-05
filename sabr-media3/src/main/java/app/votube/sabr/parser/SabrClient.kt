@@ -13,6 +13,7 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.upstream.DefaultBandwidthMeter
 import app.votube.sabr.manifest.Representation
 import app.votube.sabr.manifest.SabrManifest
+import app.votube.sabr.player.SabrSessionStats
 import com.google.protobuf.ByteString
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -572,6 +573,7 @@ class SabrClient private constructor(
                                     seg = fallbackFormat.getSegment(skip.sequenceNumber)
                                     if (seg != null) {
                                         Log.i(TAG, "live fallback skip: +${seg.header.startMs - requestedTime}ms seq=${seg.sequenceNumber} startMs=${seg.header.startMs} ~ requestedTime $requestedTime instead of $requestedSeq")
+                                        SabrSessionStats.onFallbackSkip(seg.header.startMs - requestedTime)
                                     }
                                 }
                             }
@@ -589,6 +591,7 @@ class SabrClient private constructor(
                                     seg = fallbackFormat.getSegment(nearestHead)
                                     if (seg != null) {
                                         Log.i(TAG, "live nearest head fallback: returned $nearestHead for head $headSeq")
+                                        SabrSessionStats.onNearestHead()
                                         hasStartedLive = true
                                     }
                                 }
@@ -612,6 +615,7 @@ class SabrClient private constructor(
                     val headTimeNow = withState { liveMetadata?.headTimeMs }
                     if (headSeqNow != null && headSeqNow > playbackRequest.segment) {
                         Log.w(TAG, "live hole skip: itag=$itag seq=${playbackRequest.segment} missing, head=$headSeqNow — re-anchor and retry once")
+                        SabrSessionStats.onHoleSkipAttempt()
                         val stepMs = withState { getLastRealStepMs(itag) } ?: 2000L
                         withState {
                             lastReturnedSequenceByItag[itag] = headSeqNow - 1
@@ -640,6 +644,7 @@ class SabrClient private constructor(
                         }
                         if (skipServed != null) {
                             Log.i(TAG, "live hole skip served: itag=$itag seq=${skipServed.sequenceNumber} startMs=${skipServed.header.startMs} (was stuck at ${playbackRequest.segment})")
+                            SabrSessionStats.onHoleSkipServed()
                             noteServed(itag, skipServed)
                             return@withContext skipServed
                         }

@@ -62,6 +62,7 @@ class SabrDataSource(
         val segment = try {
             sabrClient.getNextSegment(playbackRequest)
                 ?: throw IOException("SABR returned no segment ${playbackRequest.segment} for ${playbackRequest.format.itag}")
+                    .also { SabrSessionStats.onNoSegment() }
         } catch (e: IOException) {
             Log.e(
                 "SabrStream",

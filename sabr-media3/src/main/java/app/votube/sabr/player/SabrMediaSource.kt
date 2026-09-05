@@ -84,6 +84,8 @@ class SabrMediaSource(
             // v28: сбрасываем монитор факта качества — старые served-значения не должны
             // переживать смену сорса (читатель в UI доверяет только свежим <30с).
             SabrQualityMonitor.reset(manifest.videoId)
+            // v30: итог прошлой сессии в лог + обнуление счётчиков дыр/отдач.
+            SabrSessionStats.startSession(manifest.videoId)
             return source
         }
 
