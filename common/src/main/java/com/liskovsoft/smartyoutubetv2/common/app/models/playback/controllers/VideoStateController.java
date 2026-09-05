@@ -734,7 +734,9 @@ public class VideoStateController extends BasePlayerController {
     }
 
     private long getLiveThreshold() {
-        return getLiveBuffer() + 5_000;
+        // v41-test: привязь спущена (эксперимент «тёплый кеш» — сидеть в 2-3 мин от головы).
+        // Боевой вариант: задержка N → порог N+15с. Не забыть вернуть/параметризовать!
+        return 600_000;
     }
 
     private long getLiveBuffer() {

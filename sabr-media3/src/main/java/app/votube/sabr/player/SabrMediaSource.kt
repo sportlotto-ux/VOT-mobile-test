@@ -121,7 +121,8 @@ class SabrMediaSource(
             // app-сторожем 30с/35с (VideoStateController) и SABR-стартом −30с: единая зона.
             .setTargetOffsetMs(22000)
             .setMinOffsetMs(12000)
-            .setMaxOffsetMs(60000)
+            // v41-test: потолок 600с (эксперимент «тёплый кеш»). Вернуть 60000/параметризовать!
+            .setMaxOffsetMs(600000)
             .setMinPlaybackSpeed(1.0f)
             .setMaxPlaybackSpeed(1.2f)
             .build()
@@ -233,7 +234,8 @@ class SabrMediaSource(
         val liveConfig = if (serverTargetMs != null) MediaItem.LiveConfiguration.Builder()
             .setTargetOffsetMs(serverTargetMs.coerceIn(15000, 30000))
             .setMinOffsetMs(12000)
-            .setMaxOffsetMs(60000)
+            // v41-test: потолок 600с (эксперимент «тёплый кеш»). Вернуть 60000/параметризовать!
+            .setMaxOffsetMs(600000)
             .build() else liveConfiguration
         val timeline =
             SabrTimeline(
