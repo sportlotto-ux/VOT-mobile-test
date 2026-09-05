@@ -1013,8 +1013,9 @@ class DefaultSabrChunkSource(
             val holderFps = format.frameRate
             val fPen = if (presetFps <= 0 || holderFps <= 0) 0
                 else { val d = kotlin.math.abs(presetFps - holderFps); if (d < 1f) 0 else 1000 + d.toInt() }
-            val cPen = if (presetCodecs.isNullOrEmpty() || format.codecs.isNullOrEmpty()) 0
-                else if (codecFamily(presetCodecs) == codecFamily(format.codecs)) 0 else 500
+            val holderCodecs = format.codecs
+            val cPen = if (presetCodecs.isNullOrEmpty() || holderCodecs.isNullOrEmpty()) 0
+                else if (codecFamily(presetCodecs) == codecFamily(holderCodecs)) 0 else 500
             val score = hPen.toLong() * 1_000_000L + fPen * 1000L + cPen
             if (score < bestScore) {
                 bestScore = score
