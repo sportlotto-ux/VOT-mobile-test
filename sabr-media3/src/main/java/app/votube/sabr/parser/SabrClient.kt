@@ -639,9 +639,24 @@ class SabrClient private constructor(
                                 if (nearestHead != null) {
                                     seg = fallbackFormat.getSegment(nearestHead)
                                     if (seg != null) {
-                                        Log.i(TAG, "live nearest head fallback: returned $nearestHead for head $headSeq" + if (dvrRewind) " (dvr rewind, requested $requestedSeq)" else "")
-                                        SabrSessionStats.onNearestHead()
-                                        hasStartedLive = true
+                                        val jumpMs = seg.header.startMs - requestedTime
+                                        // v42: позиционирование по времени. Тихий прыжок — только
+                                        // в пределах 30с от запрошенного (плеер поглощает незаметно).
+                                        // Дальше — пустота: отдаём ближайший вперёд, но честно
+                                        // (fallbackSkip-статистика, а не nearestHead) — якорь трека
+                                        // всё равно едет через noteServed ниже, треки сходятся за
+                                        // пару раундов (лог 18:14: 885→957→961). Древнее
+                                        // запрошенного — не отдаём (призраки v38).
+                                        if (jumpMs in -120_000..30_000) {
+                                            Log.i(TAG, "live nearest head fallback: returned $nearestHead for head $headSeq" + if (dvrRewind) " (dvr rewind, requested $requestedSeq)" else "")
+                                            SabrSessionStats.onNearestHead()
+                                        } else if (jumpMs > 30_000) {
+                                            Log.i(TAG, "live void jump: +${jumpMs}ms seq=$nearestHead startMs=${seg.header.startMs} ~ requestedTime $requestedTime (head $headSeq)")
+                                            SabrSessionStats.onFallbackSkip(jumpMs)
+                                        } else {
+                                            seg = null
+                                        }
+                                        if (seg != null) hasStartedLive = true
                                     }
                                 } else {
                                     SabrSessionStats.onStaleRejected()
