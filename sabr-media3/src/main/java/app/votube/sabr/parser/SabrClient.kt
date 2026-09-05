@@ -484,6 +484,15 @@ class SabrClient private constructor(
         withState {
             lastFormatUseMs[itag] = SystemClock.elapsedRealtime()
             initializedFormats[itag]?.bufferedSegments?.keys?.retainAll(playbackRequest.bufferedSegments)
+            // v38.1: эвикция и на чтении. В засуху storeSegment не вызывается — карта
+            // протухает при уходе головы, и fallback'ы видят только древность
+            // (staleRejected десятками). Пол молодой головы — отрицательный, no-op.
+            val headSeq = liveMetadata?.headSequenceNumber
+            if (headSeq != null) {
+                val readFloor = headSeq - STALE_KEEP_SEGS
+                initializedFormats[itag]?.downloadedSegments?.keys?.removeAll { it < readFloor }
+                initializedFormats[itag]?.bufferedSegments?.keys?.removeAll { it < readFloor }
+            }
         }
         Log.i(TAG, "getNextSegment: itag=$itag, requested=${playbackRequest.segment}, live=${isLive()}, initFormats=${withState { initializedFormats.keys }}, hasFormat=${hasFormatInitialized(itag)}")
         val result = runBlocking {
