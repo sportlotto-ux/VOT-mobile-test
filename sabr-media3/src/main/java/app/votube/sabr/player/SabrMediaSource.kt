@@ -248,8 +248,11 @@ class SabrMediaSource(
         val windowMs = if (headTimeMs > windowStartMs) headTimeMs - windowStartMs else 0L
         if (windowMs <= 0) return
         val windowUs = Util.msToUs(windowMs)
-        // Стабильность как в браузере — 15 сек до головы (3 сегмента), не меньше 5 сек от начала
-        val defaultPosUs = (windowUs - Util.msToUs(15000)).coerceAtLeast(Util.msToUs(5000).coerceAtMost(windowUs / 2))
+        // Старт в 30с за головой: сегменты 30-секундной давности гарантированно лежат
+        // на сервере — стартовые запросы не участвуют в head-гонках (v33, предложение
+        // пользователя). Exo к краю сам не тянет (minSpeed=1.0, 30с < maxOffset 60с).
+        // Не меньше 5с от начала окна (свежие эфиры с коротким окном — как раньше).
+        val defaultPosUs = (windowUs - Util.msToUs(30000)).coerceAtLeast(Util.msToUs(5000).coerceAtMost(windowUs / 2))
         // Обновляем только если окно заметно выросло (голова +5с).
         // v29: душим стартовый seek-шторм. Было: каждый тик LiveMetadata (1-4с) дёргал
         // refreshSourceInfo; пока positionUs не зафиксирован стартом воспроизведения,
