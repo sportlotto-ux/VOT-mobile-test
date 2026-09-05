@@ -149,9 +149,21 @@ class SabrClient private constructor(
        readTimeout ограничивает ТОЛЬКО паузу между байтами (не весь стрим):
        легитимный long-poll с типовым потоком данных проходит, мёртвое соединение
        обрывается через 20с → Media3 перезапрашивает чанк по своей политике ретраев. */
+    /* Разбор другой модели: зависший edge-поток + readTimeout 20с = фриз до 20с
+     *  до ретрая (наши эпизоды 10-28с BUFFERING). readTimeout — это макс. пауза МЕЖДУ
+     *  БАЙТАМИ, а не общее время: long-poll и медленные чанки байты дают, убьёт только
+     *  по-настоящему мёртвый поток. 20с → 10с. */
     private val client: OkHttpClient = OkHttpManager.instance().getClient()
         .newBuilder()
-        .readTimeout(20, TimeUnit.SECONDS)
+        .readTimeout(10, TimeUnit.SECONDS)
+        // Провайдер пользователя — только IPv4. Без пина каждое новое соединение
+        // может сначала упереться в IPv6-таймаут (DNS отдаёт AAAA, сеть их дропает),
+        // и только потом откатиться. Сокетов у нас много (real+prefetch полосы,
+        // эвикции пула) — секунды на каждом. Пин IPv4 убирает класс stall'ов.
+        .dns { hostname ->
+            val all = okhttp3.Dns.SYSTEM.lookup(hostname)
+            all.filterIsInstance<java.net.Inet4Address>().ifEmpty { all }
+        }
         .build()
     private var requestNumber = java.util.concurrent.atomic.AtomicInteger(1)
     private var playbackCookie: PlaybackCookie? = null
@@ -567,7 +579,20 @@ class SabrClient private constructor(
                             }
                         }
                         Log.i(TAG, "media request: attempt=$attempt, itag=$itag, segment=${playbackRequest.segment}, playerTimeMs=${playbackRequest.segmentStartTimeMs}")
-                        media(playbackRequest)
+                        // Совет Gemini, проверено: транспортную половину (RST/мёртвое
+                        // соединение) OkHttp делает сам — пул выкидывает повисшее. А вот
+                        // метка player_time в ретрае протухает на паузах — обновляем её
+                        // с якоря, иначе сервер ровняется по вчерашнему времени.
+                        val freshReq = if (attempt > 0) {
+                            val anchorMs = withState { lastReturnedEndTimeMsByItag[itag] }
+                                ?: playbackRequest.segmentStartTimeMs
+                            PlaybackRequest(
+                                playbackRequest.format, playbackRequest.playerPosition,
+                                playbackRequest.playbackSpeed, playbackRequest.segment,
+                                anchorMs, playbackRequest.bufferedSegments,
+                            )
+                        } else playbackRequest
+                        media(freshReq)
                         // Retain selected + any format that still holds data or was used recently (30s)
                         // — avoids churn when ABR oscillates and lets multiplexed responses reuse
                         // already-downloaded segments for the other track without re-fetch.

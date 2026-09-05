@@ -542,8 +542,21 @@ public class VideoStateController extends BasePlayerController {
         }
 
         // Do I need to check that item isn't live? (state != null && !item.isLive)
+        // v44-test: на live никогда не реставрим протухшую позицию. Ловушка 21:05 на
+        // 214-й поймала: restorePosition дёргал setPositionMs=0 (стрим на 7ч назад!) →
+        // сторож видел часы отставания → рывок к голове → отравленная очередь →
+        // buffering → снова restore → 45 seek'ов за 2 мин и 37с фризы. Правило:
+        // live restore только в пределах 60с от головы, остальное протухло.
+        // Ручная DVR-отмотка идёт через UI-seek, её не затрагиваем. VOD как был.
         if (state != null) {
-            getPlayer().setPositionMs(state.positionMs);
+            if (item.isLive) {
+                long liveHeadMs = getPlayer().getDurationMs();
+                if (liveHeadMs > 0 && state.positionMs >= liveHeadMs - 60_000) {
+                    getPlayer().setPositionMs(state.positionMs);
+                }
+            } else {
+                getPlayer().setPositionMs(state.positionMs);
+            }
         }
 
         if (!mIsPlayBlocked) {
@@ -730,7 +743,14 @@ public class VideoStateController extends BasePlayerController {
             return false;
         }
 
-        return getPlayer().getDurationMs() - getPlayer().getPositionMs() <= 1_000;
+        // v44-test: duration -1/0 (сорс ещё не готов) давал liveEnd=true и seek(-30001)
+        // на каждом buffering (ловушка 21:05). Требуем известную длительность.
+        long durationMs = getPlayer().getDurationMs();
+        if (durationMs <= 0) {
+            return false;
+        }
+
+        return durationMs - getPlayer().getPositionMs() <= 1_000;
     }
 
     private long getLiveThreshold() {
