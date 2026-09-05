@@ -318,6 +318,10 @@ class DefaultSabrChunkSource(
             val initialIdx = selectInitialLiveHolderIndex()
             if (initialIdx != -1 && representationHolders[initialIdx] !== representationHolder) {
                 representationHolder = representationHolders[initialIdx]
+                // v31: override обязан двигать и selectFormat клиента — иначе init/сессия
+                // строятся вокруг селектора (лог 09:55: сервер init'ил 247, а отдавали 244
+                // с available=null → 18с hole-скипов в пустоту → Source error → IDLE).
+                sabrClient.selectFormat(representationHolder.representation)
                 val rep = representationHolder.representation
                 android.util.Log.i(
                     "SabrChunkSource",

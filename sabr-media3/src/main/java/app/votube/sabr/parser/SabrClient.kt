@@ -84,7 +84,12 @@ private data class InitializedFormat(
         val segment = downloadedSegments.remove(sequenceNumber)
             ?: initSegment?.takeIf { it.sequenceNumber == sequenceNumber }
             ?: return null
-        bufferedSegments[sequenceNumber] = segment.copy(data = mutableListOf())
+        // v31: buffered-копия хранит ДАННЫЕ, а не пустой скелет. Раньше повторный запрос
+        // того же seq после cancel/InterruptedException (в live — постоянно: seek'и и
+        // refresh'и убивают in-flight) находил только выпотрошенную копию → miss →
+        // hole-skip churn → propagate → голод (лог 09:56: servedV=21 за 95с). Память
+        // ограничена: buffered чистится retainAll(playerBuffered) в getNextSegment.
+        bufferedSegments[sequenceNumber] = segment
         return segment
     }
 
@@ -636,6 +641,21 @@ class SabrClient private constructor(
                             playbackRequest.bufferedSegments,
                         )
                         media(skipReq)
+                        // v31: ре-якорный ответ мог привезти и ИСХОДНЫЙ сегмент — проверяем
+                        // его первым (лог 09:56:11: available=[1986194] при итоговом провале:
+                        // хотели 1986194, смотрели только head-время, своё не заметили).
+                        val origServed = withState {
+                            val f = initializedFormats[itag] ?: return@withState null
+                            if (f.hasSegment(playbackRequest.segment)) f.getSegment(playbackRequest.segment)
+                            else findTimeMatch(f, playbackRequest.segmentStartTimeMs, itag)
+                                ?.let { f.getSegment(it.sequenceNumber) }
+                        }
+                        if (origServed != null) {
+                            Log.i(TAG, "live hole skip recovered original: itag=$itag seq=${origServed.sequenceNumber} (was stuck at ${playbackRequest.segment})")
+                            SabrSessionStats.onHoleSkipServed()
+                            noteServed(itag, origServed)
+                            return@withContext origServed
+                        }
                         val skipServed = withState {
                             val f = initializedFormats[itag] ?: return@withState null
                             val exact = if (f.hasSegment(headSeqNow)) f.getSegment(headSeqNow) else null
