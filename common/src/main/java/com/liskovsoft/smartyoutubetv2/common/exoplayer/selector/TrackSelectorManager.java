@@ -426,7 +426,11 @@ public class TrackSelectorManager implements TrackSelectorCallback {
         // chunk source держит его без ABR-прыжков. Авто-выбор = 0 (как раньше).
         if (rendererIndex == RENDERER_INDEX_VIDEO) {
             FormatItem preset = PlayerData.instance(mContext).getFormat(FormatItem.TYPE_VIDEO);
-            SabrQualityMonitor.INSTANCE.setPreset(preset != null && preset.isPreset() ? preset.getHeight() : 0);
+            boolean isPreset = preset != null && preset.isPreset();
+            SabrQualityMonitor.INSTANCE.setPreset(
+                    isPreset ? preset.getHeight() : 0,
+                    isPreset ? preset.getFrameRate() : 0,
+                    isPreset ? preset.getCodecs() : null);
         }
     }
 
@@ -963,6 +967,14 @@ public class TrackSelectorManager implements TrackSelectorCallback {
             if (bestGroup != -1) {
                 setSelection(RENDERER_INDEX_VIDEO, bestGroup, bestTrack);
                 Log.d(TAG, "syncSelectedTrackWithSabr: re-marked to " + servedHeight + "p");
+                // v32: при активном пресете дотягиваем и сам Exo-селектор (applyOverride):
+                // иначе селекция продолжает жить своей жизнью (уползает на 1080), а UI,
+                // читающий селектор напрямую (stats-overlay через ExoPlayerController),
+                // врёт. Без пресета (авто-ABR) — только дисплейная перемаркировка выше.
+                if (monitor.getPresetHeight() > 0) {
+                    applyOverride(RENDERER_INDEX_VIDEO);
+                    Log.d(TAG, "syncSelectedTrackWithSabr: selector pinned to preset");
+                }
             }
         } catch (Exception e) {
             Log.w(TAG, "syncSelectedTrackWithSabr failed: " + e);

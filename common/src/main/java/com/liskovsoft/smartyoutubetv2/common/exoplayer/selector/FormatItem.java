@@ -33,6 +33,7 @@ public interface FormatItem {
     String getLanguage();
     int getWidth();
     int getHeight();
+    String getCodecs();
     int getType();
     MediaTrack getTrack();
 

@@ -248,7 +248,9 @@ class DefaultSabrChunkSource(
         // (live+VOD, каждый чанк). 0 = авто: штатный ABR ниже. Читается из монитора,
         // куда его кладут фабрика сорса (старт) и TrackSelectorManager (HQ-диалог).
         val presetHeight = if (trackType == C.TRACK_TYPE_VIDEO) SabrQualityMonitor.getPresetHeight() else 0
-        val presetIdx = if (presetHeight > 0) presetHolderIndex(presetHeight) else -1
+        val presetIdx = if (presetHeight > 0) presetHolderIndex(
+            presetHeight, SabrQualityMonitor.getPresetFps(), SabrQualityMonitor.getPresetCodecs()
+        ) else -1
         val presetLocked = presetIdx != -1
         if (presetLocked) {
             if (representationHolders[presetIdx] !== representationHolder) {
@@ -990,31 +992,49 @@ class DefaultSabrChunkSource(
         }
     }
 
-    // v32: holder под пресет пользователя: точная высота, иначе максимальная ниже,
-    // иначе минимальная. -1 — высот нет (фолбэк на авто-путь).
-    private fun presetHolderIndex(presetHeight: Int): Int {
-        var bestUnder = -1
-        var bestUnderH = -1
-        var lowest = -1
-        var lowestH = Int.MAX_VALUE
+    // v32: holder под пресет пользователя. Высота доминирует (точная → максимальная ниже →
+    // минимальная); при равной высоте — ближе fps, затем семейство кодека (1080p60 ≠ 1080p30,
+    // vp9 ≠ avc). Неизвестные метаданные (fps/codec ≤ 0/null) не штрафуются.
+    // -1 — высот нет (фолбэк на авто-путь).
+    private fun presetHolderIndex(presetHeight: Int, presetFps: Float, presetCodecs: String?): Int {
+        var best = -1
+        var bestScore = Long.MAX_VALUE
         for (i in representationHolders.indices) {
-            val h = representationHolders[i].representation.format.height
+            val format = representationHolders[i].representation.format
+            val h = format.height
             if (h <= 0) {
                 continue
             }
-            if (h == presetHeight) {
-                return i
+            val hPen = when {
+                h == presetHeight -> 0
+                h < presetHeight -> presetHeight - h
+                else -> 100_000 + (h - presetHeight)
             }
-            if (h < presetHeight && h > bestUnderH) {
-                bestUnderH = h
-                bestUnder = i
-            }
-            if (h < lowestH) {
-                lowestH = h
-                lowest = i
+            val holderFps = format.frameRate
+            val fPen = if (presetFps <= 0 || holderFps <= 0) 0
+                else { val d = kotlin.math.abs(presetFps - holderFps); if (d < 1f) 0 else 1000 + d.toInt() }
+            val cPen = if (presetCodecs.isNullOrEmpty() || format.codecs.isNullOrEmpty()) 0
+                else if (codecFamily(presetCodecs) == codecFamily(format.codecs)) 0 else 500
+            val score = hPen.toLong() * 1_000_000L + fPen * 1000L + cPen
+            if (score < bestScore) {
+                bestScore = score
+                best = i
             }
         }
-        return if (bestUnder != -1) bestUnder else lowest
+        return best
+    }
+
+    // v32.1: семейства кодеков для сравнения пресета ("vp9") с полным codecs holders
+    // ("vp09.00.31.08"). Неизвестное → само себя (совпадает только с таким же).
+    private fun codecFamily(codecs: String): String {
+        val c = codecs.lowercase()
+        return when {
+            c.startsWith("vp09") || c == "vp9" -> "vp9"
+            c.startsWith("avc1") || c == "avc" -> "avc"
+            c.startsWith("av01") -> "av01"
+            c.startsWith("hev1") || c.startsWith("hvc1") || c == "hevc" -> "hevc"
+            else -> c
+        }
     }
 
     // v28: стартовый holder live — максимальная высота <= 480, иначе минимальная высота.

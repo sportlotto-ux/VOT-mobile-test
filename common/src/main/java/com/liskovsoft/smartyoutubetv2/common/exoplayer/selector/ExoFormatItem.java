@@ -424,6 +424,11 @@ public class ExoFormatItem implements FormatItem {
     }
 
     @Override
+    public String getCodecs() {
+        return mCodecs;
+    }
+
+    @Override
     public int getType() {
         return mType;
     }
