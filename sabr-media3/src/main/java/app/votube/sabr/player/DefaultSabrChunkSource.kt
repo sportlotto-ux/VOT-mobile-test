@@ -557,9 +557,13 @@ class DefaultSabrChunkSource(
                         requestedTimeMs = if (minSeekMs != null && headTimeMs != null) rawRequested.coerceIn(minSeekMs, headTimeMs) else rawRequested
                         sabrClient.hasStartedLive = true
                         android.util.Log.i("SabrChunkSource", "live initial head (ignore seek): headSeq=$headSeq headTimeMs=$headTimeMs seekMs=$rawSeek -> segmentNum=$segmentNum requestedTimeMs=$requestedTimeMs")
-                    } else if (serverSeekMs != null) {
+                    } else if (serverSeekMs != null && !sabrClient.hasStartedLive) {
                         sabrClient.consumeServerSeekMs()
-                        // Сервер сказал куда мотать (ненулевой seek) — берём отрезок по времени seek
+                        // Сервер сказал куда мотать (ненулевой seek) — ТОЛЬКО до старта сессии.
+                        // После старта serverSeek спамится каждую секунду на край и перебивал бы
+                        // ручной rewind: seek назад → пустая очередь → запрос уходил на край
+                        // (лог 17:32: шесть server seek подряд вернули отмотку к голове).
+                        // После старта всегда DVR mapping по позиции пользователя ниже.
                         requestedTimeMs = serverSeekMs
                         val estDurationMs = maxOf(sabrClient.getLastRealStepMs(representationHolder.representation.streamInfo.itag) ?: 0L, if (representationHolder.lastSegmentDurationUs > 0) representationHolder.lastSegmentDurationUs / 1000 else 2000L)
                         if (headSeq != null && headTimeMs != null) {
