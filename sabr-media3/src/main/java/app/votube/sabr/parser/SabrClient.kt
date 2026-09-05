@@ -15,8 +15,11 @@ import app.votube.sabr.manifest.Representation
 import app.votube.sabr.manifest.SabrManifest
 import app.votube.sabr.player.SabrSessionStats
 import com.google.protobuf.ByteString
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import misc.Common.FormatId
@@ -126,6 +129,14 @@ class SabrClient private constructor(
     private var poToken: ByteString? = null
     private var fatalError: SabrError? = null
     private val dispatcher = Dispatchers.IO.limitedParallelism(1)
+    /** Скоуп проактивной дозагрузки. Ревью: ОТДЕЛЬНАЯ полоса от real-запросов.
+     *  media() внутри блокирующая (OkHttp execute), и на общей однопоточной полосе
+     *  prefetch вставал бы поперёк just-in-time запросов (round trip 2-5с). Состояние
+     *  и так под stateLock (два loader-потока A/V уже предполагаются), ответы
+     *  идемпотентны per-segment — вторая полоса безопасна. Реальные запросы
+     *  prefetch никогда не ждёт. */
+    private val prefetchDispatcher = Dispatchers.IO.limitedParallelism(1)
+    private val prefetchScope = CoroutineScope(SupervisorJob() + prefetchDispatcher)
     private var audioFormat: Representation? = null
     private var videoFormat: Representation? = null
     private val initializedFormats = mutableMapOf<Int, InitializedFormat>()
@@ -142,7 +153,7 @@ class SabrClient private constructor(
         .newBuilder()
         .readTimeout(20, TimeUnit.SECONDS)
         .build()
-    private var requestNumber = 1
+    private var requestNumber = java.util.concurrent.atomic.AtomicInteger(1)
     private var playbackCookie: PlaybackCookie? = null
     private var backoffTime: Int? = null
     /** Latest server-provided readahead targets for the next SABR request. */
@@ -158,6 +169,8 @@ class SabrClient private constructor(
     /** sequence последнего реально отданного сервером сегмента по itag — чтобы следующий запрос
      *  шёл от реальной нумерации сервера, а не от локально посчитанного индекса (нормализация по времени) */
     private val lastReturnedSequenceByItag = mutableMapOf<Int, Long>()
+    /** Время последнего prefetch-запроса per-itag — тротлл проактивной дозагрузки. */
+    private val lastPrefetchMsByItag = mutableMapOf<Int, Long>()
     /** Наблюдаемый реальный ритм эфира (мс): шаг стартов соседних отданных сегментов одного формата.
      *  Декларируемая durationMs (protobuf) у части эфиров не совпадает с реальным шагом
      *  (лог 13:32-13:34: durationMs 3-7с при реальном шаге 2с) → декларируемая очередь убегала
@@ -794,6 +807,60 @@ class SabrClient private constructor(
         return result
     }
 
+    private data class PrefetchPlan(
+        val formatId: FormatId,
+        val lastSeq: Long,
+        val nextTimeMs: Long,
+        val coveredMs: Long,
+    )
+
+    /** Проактивная дозагрузка (вызывается из SabrDataSource после каждой отдачи):
+     *  если кэш формата покрывает вперёд по времени меньше PREFETCH_AHEAD_MS —
+     *  заранее тянем следующее окно, НЕ блокируя плеер. Запрос just-in-time у
+     *  live-эджа превращает латентность генерации куска CDN (2-5с) во фриз:
+     *  очередь уже упёрлась в отсутствующий сегмент, отступать некуда. Ранний
+     *  запрос складывает сегменты в кэш, getNextSegment отдаёт их мгновенным
+     *  тайм-матчем без HTTP — фризы и fallback-прыжки времени исчезают.
+     *  Prefetch живёт на однопоточном dispatcher'е и участвует в EMPTY_BACKOFF-
+     *  дисциплине media(), поэтому шторма не создаёт; тротлл per-itag страхует
+     *  от дублей. Вызовы после тайм-матча из кэша бесплатны (covered >= 20с —
+     *  выходим без запроса). */
+    fun maybePrefetchAhead(playbackRequest: PlaybackRequest) {
+        if (fatalError != null) return
+        // Ревью: только live. На VOD Exo сам дозирует закачку — лишний async-трафик.
+        if (!isLive()) return
+        val itag = playbackRequest.format.itag
+        val now = SystemClock.elapsedRealtime()
+        val plan = withState {
+            val f = initializedFormats[itag] ?: return@withState null
+            // Ревью: троттл под локом — A/V loader-потоки плюс вторая prefetch-полоса.
+            if (now - (lastPrefetchMsByItag[itag] ?: 0L) < PREFETCH_MIN_INTERVAL_MS) return@withState null
+            val endMs = lastReturnedEndTimeMsByItag[itag] ?: return@withState null
+            val lastSeq = lastReturnedSequenceByItag[itag] ?: return@withState null
+            val coveredMs = (f.downloadedSegments.values.asSequence() + f.bufferedSegments.values.asSequence())
+                .filter { !it.header.isInitSeg && it.header.startMs >= endMs }
+                .sumOf { it.duration }
+            if (coveredMs >= PREFETCH_AHEAD_MS) return@withState null
+            lastPrefetchMsByItag[itag] = now
+            PrefetchPlan(f.id, lastSeq, endMs, coveredMs)
+        } ?: return
+        prefetchScope.launch {
+            try {
+                Log.i(TAG, "prefetch ahead: itag=$itag covered=${plan.coveredMs}ms < $PREFETCH_AHEAD_MS — request next window from ${plan.nextTimeMs}ms")
+                media(PlaybackRequest(
+                    plan.formatId,
+                    playbackRequest.playerPosition,
+                    playbackRequest.playbackSpeed,
+                    plan.lastSeq + 1,
+                    plan.nextTimeMs,
+                    playbackRequest.bufferedSegments,
+                ))
+            } catch (e: Exception) {
+                Log.w(TAG, "prefetch ahead failed: ${e.message}")
+            }
+        }
+    }
+
     private suspend fun media(playbackRequest: PlaybackRequest) {
         backoffTime?.let { delay(it.toLong()); backoffTime = null }
         // Межвызовный троттл после пустого ответа: два трека (аудио+видео) идут через один
@@ -842,7 +909,7 @@ class SabrClient private constructor(
                     .addAllUnsentSabrContexts(sabrContexts.keys.filter { it !in activeSabrContexts })
                     .setPlaybackCookie(playbackCookie?.toByteString() ?: ByteString.empty()).build()).build()
         }
-        val request = Request.Builder().url("$url&rn=${requestNumber++}")
+        val request = Request.Builder().url("$url&rn=${requestNumber.getAndIncrement()}")
             .addHeader("Content-Type", CONTENT_TYPE).addHeader("Accept-Encoding", ENCODING)
             .addHeader("Accept", ACCEPT).addHeader("Origin", YOUTUBE_FRONTEND_URL)
             .addHeader("Referer", "$YOUTUBE_FRONTEND_URL/").addHeader("User-Agent", USER_AGENT)
@@ -1082,8 +1149,9 @@ class SabrClient private constructor(
         poTokenProvider?.getStreamingPoToken(videoId)?.let { ByteString.copyFrom(it) }
 
     /** Точный перевод ticks→ms без переполнения: сначала деление, остаток — отдельно.
-     *  Прямое ticks*1000 вылетает за Long при ns-timescale (лог 09:48:43). */
-    private fun ticksToMs(ticks: Long, timescale: Int): Long =
+     *  Прямое ticks*1000 вылетает за Long при ns-timescale (лог 09:48:43).
+     *  Аудит: используется и в SabrMediaSource.onLiveMetadata (internal). */
+    internal fun ticksToMs(ticks: Long, timescale: Int): Long =
         if (timescale <= 0) 0L else ticks / timescale * 1000 + (ticks % timescale) * 1000 / timescale
 
     companion object {
@@ -1121,5 +1189,13 @@ class SabrClient private constructor(
         /** Пол оценки канала, докладываемой серверу (бит/с): не даём обрушившемуся сэмплу
          *  метра «запереть» серверный ABR на минимуме между сессиями. */
         private const val MIN_REPORTED_BANDWIDTH_BPS = 1_000_000L
+        /** Проактивная дозагрузка: пока кэш не покрывает вперёд 20с — тянем заранее.
+         *  just-in-time запрос у live-эджа превращает латентность генерации куска CDN
+         *  (2-5с) во фриз; ранний запрос кладёт сегменты в кэш, getNextSegment отдаёт
+         *  их мгновенным тайм-матчем. Порог согласован с серверным readahead-таргетом
+         *  (22-50с): prefetch срабатывает только когда сервер недодаёт префетч. */
+        private const val PREFETCH_AHEAD_MS = 20_000L
+        /** Тротлл prefetch-запросов per-itag: чаще раза в 2с не долбим. */
+        private const val PREFETCH_MIN_INTERVAL_MS = 2_000L
     }
 }

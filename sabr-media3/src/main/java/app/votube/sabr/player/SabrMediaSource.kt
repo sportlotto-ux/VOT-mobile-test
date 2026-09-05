@@ -260,8 +260,10 @@ class SabrMediaSource(
         // Окно РАСТЁТ от фиксированного старта — это нормально: period UID стабилен,
         // ExoPlayer сохраняет позицию при refreshSourceInfo, загрузка продолжается от очереди.
         val headTimeMs = if (meta.hasHeadTimeMs()) meta.headTimeMs else 0L
+        // Аудит: было наивное ticks*1000 — переполнение при ns-timescale (тот же класс
+        // что v20 в SabrClient). Единый ticksToMs.
         val minSeekMs = if (meta.hasMinSeekableTimeTicks() && meta.hasMinSeekableTimescale() && meta.minSeekableTimescale != 0)
-            meta.minSeekableTimeTicks * 1000L / meta.minSeekableTimescale else 0L
+            sabrClient.ticksToMs(meta.minSeekableTimeTicks, meta.minSeekableTimescale) else 0L
         val windowStartMs = sabrClient.getLiveWindowStartMs() ?: minSeekMs
         val windowMs = if (headTimeMs > windowStartMs) headTimeMs - windowStartMs else 0L
         if (windowMs <= 0) return

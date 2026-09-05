@@ -127,6 +127,11 @@ class SabrDataSource(
             bytesTransferred((networkDelta - segment.length()).toInt())
         }
 
+        // Проактивная дозагрузка: если покрытие кэша вперёд < 20с — тянем следующее окно
+        // заранее (не блокируя текущую отдачу), чтобы следующий just-in-time запрос не
+        // упирался в латентность CDN у live-эджа. Подробности — SabrClient.maybePrefetchAhead.
+        sabrClient.maybePrefetchAhead(playbackRequest)
+
         data = CompositeBuffer(segment.data)
         lastSegmentDurationUs = segment.duration * 1000L
         return data?.remaining()?.toLong() ?: 0L
