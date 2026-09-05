@@ -102,6 +102,9 @@ class DefaultSabrChunkSource(
     private var prevServed: Long = 0L
     private var troubleLevel: Long = 0L
     private var troubleBaselineSet: Boolean = false
+    // v39: сторож тонкого буфера (мягкий голод мимо счётчиков ошибок): если 45с подряд
+    // буфер ниже 8с — чанки слишком жирные для канала, спускаемся. Выше 15с — здоровы.
+    private var thinBufferSinceMs: Long = 0L
 
     // v9: гейт по остатку буфера (предложение пользователя: держать 15-30с,
     // подтаскивать каждые 5-7с по остатку, всегда знать голову эфира). <15с — тянуть
@@ -343,6 +346,23 @@ class DefaultSabrChunkSource(
         // кончается отменой докачки (InterruptedException) и сбросом очереди.
         // Стартовый разгон не трогаем (пустая очередь — можно).
         val shouldSuppressUpgrade = isLive && isUpgrade && bufferedMs < 8_000 && queue.isNotEmpty()
+        // v39: сторож тонкого буфера (мягкий голод: ошибок нет, но goodput ~0.3x — ABR сидит
+        // на 1080, серверный таргет шарашит 15→76с). 45с подряд ниже 8с — спускаемся на
+        // ступень тем же механизмом. Выше 15с — здоровы, сторож сброшен.
+        var forcedReason = "trouble overflow"
+        if (forcedIdx == -1 && isLive && trackType == C.TRACK_TYPE_VIDEO && !presetLocked) {
+            if (bufferedMs > 15000) {
+                thinBufferSinceMs = 0L
+            } else {
+                if (thinBufferSinceMs == 0L) {
+                    thinBufferSinceMs = nowMs
+                } else if (nowMs - thinBufferSinceMs >= 45000) {
+                    forcedIdx = troubleHolderIndex(representationHolder)
+                    thinBufferSinceMs = nowMs
+                    forcedReason = "thin buffer 45s"
+                }
+            }
+        }
         if (forcedIdx != -1) {
             // v37: принудительный спуск — селекцию ABR пропускаем, обслуживаем лёгкий holder.
             representationHolder = representationHolders[forcedIdx]
@@ -353,7 +373,7 @@ class DefaultSabrChunkSource(
             android.util.Log.i(
                 "SabrChunkSource",
                 "error-driven downgrade: holder idx=$forcedIdx, " +
-                    "itag=${rep.streamInfo.itag}, ${rep.format.width}x${rep.format.height} (trouble overflow)"
+                    "itag=${rep.streamInfo.itag}, ${rep.format.width}x${rep.format.height} ($forcedReason)"
             )
         } else if (presetLocked) {
             // v32: пресет держим — ABR-обновление селекции пропускаем целиком.
