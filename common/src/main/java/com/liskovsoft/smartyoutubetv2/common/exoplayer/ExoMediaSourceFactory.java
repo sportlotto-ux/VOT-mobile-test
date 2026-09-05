@@ -339,7 +339,7 @@ public class ExoMediaSourceFactory {
         // v32: стартовый пресет качества (Настройки → Плеер → Видео-пресеты): chunk source
         // держит его как закон — стартует с него и не прыгает сам. 0 = авто (как раньше).
         FormatItem videoPreset = PlayerData.instance(mContext).getFormat(FormatItem.TYPE_VIDEO);
-        SabrQualityMonitor.setPreset(videoPreset != null && videoPreset.isPreset() ? videoPreset.getHeight() : 0);
+        SabrQualityMonitor.INSTANCE.setPreset(videoPreset != null && videoPreset.isPreset() ? videoPreset.getHeight() : 0);
 
         return new SabrMediaSource.Factory(mContext, manifest, poTokenProvider)
                 .setLoadErrorHandlingPolicy(new SabrDefaultLoadErrorHandlingPolicy())

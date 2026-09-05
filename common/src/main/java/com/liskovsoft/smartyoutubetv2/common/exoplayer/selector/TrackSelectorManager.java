@@ -426,7 +426,7 @@ public class TrackSelectorManager implements TrackSelectorCallback {
         // chunk source держит его без ABR-прыжков. Авто-выбор = 0 (как раньше).
         if (rendererIndex == RENDERER_INDEX_VIDEO) {
             FormatItem preset = PlayerData.instance(mContext).getFormat(FormatItem.TYPE_VIDEO);
-            SabrQualityMonitor.setPreset(preset != null && preset.isPreset() ? preset.getHeight() : 0);
+            SabrQualityMonitor.INSTANCE.setPreset(preset != null && preset.isPreset() ? preset.getHeight() : 0);
         }
     }
 
