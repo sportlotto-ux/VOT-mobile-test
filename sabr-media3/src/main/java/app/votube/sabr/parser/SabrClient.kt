@@ -371,12 +371,10 @@ class SabrClient private constructor(
      *  исключается — он не должен быть отдан дважды. */
     private fun findTimeMatch(format: InitializedFormat?, requestedTimeMs: Long, itag: Int): Segment? {
         val cached = format?.downloadedSegments?.values ?: return null
-        val lastServedSeq = lastReturnedSequenceByItag[itag]
-        return cached.filter {
-            it.sequenceNumber != lastServedSeq &&
-                it.header.startMs >= requestedTimeMs - SAME_TIME_EPS_MS &&
-                it.header.startMs <= requestedTimeMs + LIVE_TIME_TOLERANCE_MS
-        }.minByOrNull { it.header.startMs }
+        return SabrSegmentMatcher.findTimeMatch(
+            cached, lastReturnedSequenceByItag[itag], requestedTimeMs,
+            SAME_TIME_EPS_MS, LIVE_TIME_TOLERANCE_MS,
+        )
     }
 
     /** Скип вперёд при дырке в серии (не прыжок к голове): ближайший доступный сегмент
@@ -385,12 +383,10 @@ class SabrClient private constructor(
      *  Уже отданный сегмент исключается. */
     private fun findSkipMatch(format: InitializedFormat?, requestedTimeMs: Long, itag: Int, capMs: Long): Segment? {
         val cached = format?.downloadedSegments?.values ?: return null
-        val lastServedSeq = lastReturnedSequenceByItag[itag]
-        return cached.filter {
-            it.sequenceNumber != lastServedSeq &&
-                it.header.startMs >= requestedTimeMs - SAME_TIME_EPS_MS &&
-                it.header.startMs <= requestedTimeMs + capMs
-        }.minByOrNull { it.header.startMs }
+        return SabrSegmentMatcher.findSkipMatch(
+            cached, lastReturnedSequenceByItag[itag], requestedTimeMs,
+            capMs, SAME_TIME_EPS_MS,
+        )
     }
 
     /** v43.1: индекс время→seq (DASH-дисциплина вместо арифметики headSeq−offset/est).
@@ -405,25 +401,7 @@ class SabrClient private constructor(
         consumedSegsByItag[itag]?.forEach { (seq, ts) -> points[ts.first] = seq }
         f?.downloadedSegments?.values?.forEach { points[it.header.startMs] = it.sequenceNumber }
         f?.bufferedSegments?.values?.forEach { points[it.header.startMs] = it.sequenceNumber }
-        if (points.isEmpty()) return@withState null
-        points[timeMs]?.let { return@withState it }
-        val sorted = points.keys.sorted()
-        val lower = sorted.lastOrNull { it <= timeMs }
-        val upper = sorted.firstOrNull { it >= timeMs }
-        if (lower != null && upper != null && upper > lower) {
-            val lowerSeq = points[lower] ?: return@withState null
-            val upperSeq = points[upper] ?: return@withState null
-            if (upperSeq > lowerSeq) {
-                val stepMs = realStepMsByItag[itag] ?: 2000L
-                if (stepMs > 0) {
-                    val est = lowerSeq + (timeMs - lower) / stepMs
-                    if (est in lowerSeq..upperSeq) return@withState est
-                }
-            }
-            // Скобка вырождена (перенумерация) — ближайший сосед по времени.
-            return@withState if (timeMs - lower <= upper - timeMs) lowerSeq else upperSeq
-        }
-        null
+        SabrSegmentMatcher.estimateSeqForTimeMs(points, realStepMsByItag[itag], timeMs)
     }
 
     /** Какой сегмент будет отдан для (itag, segment, requestedTimeMs): точный по sequence или
@@ -436,24 +414,16 @@ class SabrClient private constructor(
 
     /** Returns the server's current target readahead for the selected track type, if present. */
     fun getTargetReadaheadMs(format: Representation): Int? = withState {
-        val policy = nextRequestPolicy ?: return@withState null
-        val value = if (MimeTypes.isAudio(format.format.containerMimeType)) {
-            if (policy.hasTargetAudioReadaheadMs()) policy.targetAudioReadaheadMs else null
-        } else {
-            if (policy.hasTargetVideoReadaheadMs()) policy.targetVideoReadaheadMs else null
-        }
-        value?.takeIf { it >= 0 }
+        SabrSegmentMatcher.selectReadahead(
+            nextRequestPolicy, MimeTypes.isAudio(format.format.containerMimeType), minimum = false
+        )
     }
 
     /** Returns the server's current minimum readahead for the selected track type, if present. */
     fun getMinReadaheadMs(format: Representation): Int? = withState {
-        val policy = nextRequestPolicy ?: return@withState null
-        val value = if (MimeTypes.isAudio(format.format.containerMimeType)) {
-            if (policy.hasMinAudioReadaheadMs()) policy.minAudioReadaheadMs else null
-        } else {
-            if (policy.hasMinVideoReadaheadMs()) policy.minVideoReadaheadMs else null
-        }
-        value?.takeIf { it >= 0 }
+        SabrSegmentMatcher.selectReadahead(
+            nextRequestPolicy, MimeTypes.isAudio(format.format.containerMimeType), minimum = true
+        )
     }
 
     /**
@@ -862,7 +832,11 @@ class SabrClient private constructor(
     }
 
     private suspend fun media(playbackRequest: PlaybackRequest) {
-        backoffTime?.let { delay(it.toLong()); backoffTime = null }
+        // Ревью второй полосы: take под локом (запись в processPart уже под withState).
+        // Иначе prefetch съедал серверный backoff реального запроса (и наоборот) —
+        // сервер сказал ждать, а мы шли сразу.
+        val serverBackoff = withState { val v = backoffTime; backoffTime = null; v }
+        serverBackoff?.let { delay(it.toLong()) }
         // Межвызовный троттл после пустого ответа: два трека (аудио+видео) идут через один
         // dispatcher, без паузы они долбят сервер по очереди каждые ~100мс.
         val sinceEmpty0 = SystemClock.elapsedRealtime() - lastMediaEmptyMs

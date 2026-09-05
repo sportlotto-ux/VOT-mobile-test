@@ -9,6 +9,11 @@ import org.junit.Assert.assertNull
 import org.junit.Test
 import video_streaming.NextRequestPolicyOuterClass.NextRequestPolicy
 
+/**
+ * Селектор readahead-политики: аудио/видео значения выбираются независимо.
+ * Тестирует реальную функцию [SabrSegmentMatcher.selectReadahead] (см. SabrClient),
+ * а не дубликат логики.
+ */
 class ReadaheadPolicyTest {
     @Test
     fun `audio and video values are selected independently`() {
@@ -48,22 +53,13 @@ class ReadaheadPolicyTest {
     }
 
     private fun target(policy: NextRequestPolicy, representation: Representation): Int? =
-        value(policy, representation, false)
+        SabrSegmentMatcher.selectReadahead(policy, isAudio(representation), minimum = false)
 
     private fun minimum(policy: NextRequestPolicy, representation: Representation): Int? =
-        value(policy, representation, true)
+        SabrSegmentMatcher.selectReadahead(policy, isAudio(representation), minimum = true)
 
-    private fun value(policy: NextRequestPolicy, representation: Representation, minimum: Boolean): Int? {
-        val audio = MimeTypes.isAudio(representation.format.containerMimeType)
-        val value = when {
-            audio && minimum && policy.hasMinAudioReadaheadMs() -> policy.minAudioReadaheadMs
-            audio && !minimum && policy.hasTargetAudioReadaheadMs() -> policy.targetAudioReadaheadMs
-            !audio && minimum && policy.hasMinVideoReadaheadMs() -> policy.minVideoReadaheadMs
-            !audio && !minimum && policy.hasTargetVideoReadaheadMs() -> policy.targetVideoReadaheadMs
-            else -> null
-        }
-        return value?.takeIf { it >= 0 }
-    }
+    private fun isAudio(representation: Representation): Boolean =
+        MimeTypes.isAudio(representation.format.containerMimeType)
 
     private fun representation(mimeType: String): Representation = Representation(
         Format.Builder()
