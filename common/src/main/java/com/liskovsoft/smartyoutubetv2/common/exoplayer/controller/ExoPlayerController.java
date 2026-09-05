@@ -453,6 +453,19 @@ public class ExoPlayerController implements Player.Listener {
      * (e.g. 302200 when duration is 302000).
      */
     public void setPositionMs(long positionMs) {
+        // v44-test: ловушка машинных seek'ов (45 seek/сек в логе 20:18 на 213-й).
+        // Стек покажет, какой контроллер дёргает. Убрать после поимки!
+        if (BuildConfig.DEBUG || true) {
+            StringBuilder sb = new StringBuilder();
+            for (StackTraceElement el : Thread.currentThread().getStackTrace()) {
+                String s = el.toString();
+                if (s.contains("smartyoutubetv2") && !s.contains("ExoPlayerController.setPositionMs")) {
+                    sb.append(s.replace("com.liskovsoft.smartyoutubetv2.common.", "")).append(" <- ");
+                    if (sb.length() > 600) break;
+                }
+            }
+            Log.i("SeekTrap", "setPositionMs=" + positionMs + " from " + sb);
+        }
         // Url list videos at load stage has undefined (-1) length. So, we need to remove length check.
         if (mPlayer != null && positionMs >= 0) {
             long dur = getDurationMs();
