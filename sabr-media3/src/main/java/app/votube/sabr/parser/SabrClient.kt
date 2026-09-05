@@ -617,13 +617,26 @@ class SabrClient private constructor(
                             if (seg == null && headSeq != null) {
                                 val lastServedSeq = lastReturnedSequenceByItag[itag]
                                 val requestedSeq = playbackRequest.segment
-                                val nearestHead = fallbackFormat.downloadedSegments.keys
-                                    .filter { it != lastServedSeq && it >= requestedSeq && headSeq - it <= 15 }
-                                    .minByOrNull { kotlin.math.abs(it - headSeq) }
+                                val keys = fallbackFormat.downloadedSegments.keys
+                                // v41: DVR rewind — запрос далеко позади головы (ручная отмотка).
+                                // Гнаться к голове здесь нельзя: это молча и безвозвратно убивало
+                                // rewind (лог 17:43: requested 542 → returned 577 у головы 585).
+                                // Продолжаем с запрошенной точки: ближайший вперёд, иначе
+                                // ближайший назад (но не древнее 60 seq — защита от призраков v38).
+                                val dvrRewind = headSeq - requestedSeq > 20
+                                val nearestHead = if (dvrRewind) {
+                                    keys.filter { it != lastServedSeq && it >= requestedSeq }
+                                        .minOrNull()
+                                        ?: keys.filter { it != lastServedSeq && requestedSeq - it <= 60 }
+                                            .maxOrNull()
+                                } else {
+                                    keys.filter { it != lastServedSeq && it >= requestedSeq && headSeq - it <= 15 }
+                                        .minByOrNull { kotlin.math.abs(it - headSeq) }
+                                }
                                 if (nearestHead != null) {
                                     seg = fallbackFormat.getSegment(nearestHead)
                                     if (seg != null) {
-                                        Log.i(TAG, "live nearest head fallback: returned $nearestHead for head $headSeq")
+                                        Log.i(TAG, "live nearest head fallback: returned $nearestHead for head $headSeq" + if (dvrRewind) " (dvr rewind, requested $requestedSeq)" else "")
                                         SabrSessionStats.onNearestHead()
                                         hasStartedLive = true
                                     }
