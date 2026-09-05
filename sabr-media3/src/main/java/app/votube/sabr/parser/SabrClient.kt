@@ -552,10 +552,16 @@ class SabrClient private constructor(
                         if (attempt > 0) {
                             // После пустого ответа ждём дольше: следующий кусок ещё не готов.
                             val sinceEmpty = SystemClock.elapsedRealtime() - lastMediaEmptyMs
+                            // v43.3: ретраи в ритме эфира. Было 250мс против ритма 2-5с:
+                            // на упорной дыре 2 трека долбили по 8 req/s, edge отвечал всё
+                            // хуже (пустые 169Б, таймауты) → больше промахов → сильнее
+                            // долбёжка. Порочный круг. Теперь пауза — минимум полритма.
+                            val rhythmMs = withState { realStepMsByItag[itag] } ?: 2000L
+                            val rhythmPaceMs = maxOf(LIVE_RETRY_DELAY_MS, rhythmMs / 2)
                             if (lastMediaEmptyMs > 0 && sinceEmpty < EMPTY_BACKOFF_MS) {
                                 delay(EMPTY_BACKOFF_MS - sinceEmpty)
                             } else {
-                                delay(LIVE_RETRY_DELAY_MS)
+                                delay(rhythmPaceMs)
                             }
                         }
                         Log.i(TAG, "media request: attempt=$attempt, itag=$itag, segment=${playbackRequest.segment}, playerTimeMs=${playbackRequest.segmentStartTimeMs}")
