@@ -618,17 +618,20 @@ class SabrClient private constructor(
                                 val lastServedSeq = lastReturnedSequenceByItag[itag]
                                 val requestedSeq = playbackRequest.segment
                                 val keys = fallbackFormat.downloadedSegments.keys
-                                // v41: DVR rewind — запрос далеко позади головы (ручная отмотка).
-                                // Гнаться к голове здесь нельзя: это молча и безвозвратно убивало
-                                // rewind (лог 17:43: requested 542 → returned 577 у головы 585).
-                                // Продолжаем с запрошенной точки: ближайший вперёд, иначе
-                                // ближайший назад (но не древнее 60 seq — защита от призраков v38).
-                                val dvrRewind = headSeq - requestedSeq > 20
+                                // v41.1: порог — ПО ВРЕМЕНИ, не по seq. Номера на дырявых эфирах
+                                // не идут равномерной сеткой (лог 18:00: 5 seq = 200с времени:
+                                // rewind на 200с посчитался «у края» и прыгнул к голове).
+                                // Дальше 30с от головы по времени — это rewind, держим глубину.
+                                val headTime = liveMetadata?.headTimeMs
+                                val dvrRewind = headTime != null && headTime - requestedTime > 30_000
                                 val nearestHead = if (dvrRewind) {
                                     keys.filter { it != lastServedSeq && it >= requestedSeq }
                                         .minOrNull()
-                                        ?: keys.filter { it != lastServedSeq && requestedSeq - it <= 60 }
-                                            .maxOrNull()
+                                        ?: keys.mapNotNull { k ->
+                                            if (k == lastServedSeq) null
+                                            else fallbackFormat.getSegment(k)?.let { k to it.header.startMs }
+                                        }.filter { (_, startMs) -> requestedTime - startMs in 0..120_000 }
+                                            .maxByOrNull { (_, startMs) -> startMs }?.first
                                 } else {
                                     keys.filter { it != lastServedSeq && it >= requestedSeq && headSeq - it <= 15 }
                                         .minByOrNull { kotlin.math.abs(it - headSeq) }
