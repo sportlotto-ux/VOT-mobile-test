@@ -95,6 +95,13 @@ class DefaultSabrChunkSource(
     private var lastReportedAudioItag: Int = -1
     // v32: последний holder пресета (лог только при смене).
     private var lastPresetHolderIdx: Int = -1
+    // v37: интегратор голода (миссы минус отдачи). При переполнении — принудительный
+    // спуск на ступень мимо ABR: его оценка канала слепа к протокольным накладным
+    // (пустые раундтрипы, re-anchor'ы, seek'и) и держит жирное качество до смерти.
+    private var prevTrouble: Long = 0L
+    private var prevServed: Long = 0L
+    private var troubleLevel: Long = 0L
+    private var troubleBaselineSet: Boolean = false
 
     // v9: гейт по остатку буфера (предложение пользователя: держать 15-30с,
     // подтаскивать каждые 5-7с по остатку, всегда знать голову эфира). <15с — тянуть
@@ -269,6 +276,33 @@ class DefaultSabrChunkSource(
         } else {
             lastPresetHolderIdx = -1
         }
+        // v37: голод мимо ABR — только live+видео+авто (пресет — закон, его не трогаем).
+        // Каждый мисс/ретрай +1, каждая отдача −1; порог 6 ≈ два-три дохлых чанка подряд.
+        // Спуск — на ступень ниже текущей высоты и только в инициализированный формат
+        // (v31: неинициализированный = available=null = смерть). После спуска счётчик
+        // в ноль (cooldown): link либо вывезет ступень, либо накопит заново.
+        var forcedIdx = -1
+        if (isLive && trackType == C.TRACK_TYPE_VIDEO && !presetLocked) {
+            val curTrouble = SabrSessionStats.getTrouble()
+            val curServed = SabrSessionStats.getServedTotal()
+            if (!troubleBaselineSet) {
+                // Первый замер — только база (иначе чужие накопленные счётчики сессии
+                // дадут мгновенный ложный спуск при пересоздании сорса посреди сессии).
+                prevTrouble = curTrouble
+                prevServed = curServed
+                troubleBaselineSet = true
+            }
+            troubleLevel += (curTrouble - prevTrouble).coerceAtLeast(0)
+            troubleLevel = (troubleLevel - (curServed - prevServed).coerceAtLeast(0)).coerceAtLeast(0)
+            prevTrouble = curTrouble
+            prevServed = curServed
+            if (troubleLevel >= 6) {
+                forcedIdx = troubleHolderIndex(representationHolder)
+                if (forcedIdx != -1) {
+                    troubleLevel = 0
+                }
+            }
+        }
         // Hysteresis for live ABR: suppress downgrade spirals and the start-at-144p slide.
         // Лог 11:35:59→11:36:29: старт на 399 (1080p AV1), за 30с сползание 398→394 (144p).
         // Причины: (1) метр пропускной способности видел SABR-раундтрип как «медленную передачу»
@@ -309,7 +343,19 @@ class DefaultSabrChunkSource(
         // кончается отменой докачки (InterruptedException) и сбросом очереди.
         // Стартовый разгон не трогаем (пустая очередь — можно).
         val shouldSuppressUpgrade = isLive && isUpgrade && bufferedMs < 8_000 && queue.isNotEmpty()
-        if (presetLocked) {
+        if (forcedIdx != -1) {
+            // v37: принудительный спуск — селекцию ABR пропускаем, обслуживаем лёгкий holder.
+            representationHolder = representationHolders[forcedIdx]
+            sabrClient.selectFormat(representationHolder.representation)
+            lastTrackSwitchMs = nowMs
+            lastSelectedTrackIndex = forcedIdx
+            val rep = representationHolder.representation
+            android.util.Log.i(
+                "SabrChunkSource",
+                "error-driven downgrade: holder idx=$forcedIdx, " +
+                    "itag=${rep.streamInfo.itag}, ${rep.format.width}x${rep.format.height} (trouble overflow)"
+            )
+        } else if (presetLocked) {
             // v32: пресет держим — ABR-обновление селекции пропускаем целиком.
         } else if (shouldSuppressDowngrade) {
             android.util.Log.i(
@@ -1021,6 +1067,26 @@ class DefaultSabrChunkSource(
                 bestScore = score
                 best = i
             }
+        }
+        return best
+    }
+
+    // v37: ступень ниже текущей высоты (инициализированная). -1 — ниже некуда.
+    private fun troubleHolderIndex(current: RepresentationHolder): Int {
+        val curH = current.representation.format.height
+        var best = -1
+        var bestH = -1
+        for (i in representationHolders.indices) {
+            val rep = representationHolders[i].representation
+            val h = rep.format.height
+            if (h <= 0 || h >= curH || h <= bestH) {
+                continue
+            }
+            if (!sabrClient.hasFormatInitialized(rep.streamInfo.itag)) {
+                continue
+            }
+            bestH = h
+            best = i
         }
         return best
     }

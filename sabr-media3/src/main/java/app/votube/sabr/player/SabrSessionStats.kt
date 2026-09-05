@@ -92,4 +92,11 @@ object SabrSessionStats {
             "nearestHead=${nearestHead.get()} " +
             "holeSkip=${holeSkipServed.get()}/${holeSkipAttempt.get()}"
     }
+
+    // v37: интегратор беды для error-driven downgrade: каждый мисс/ретрай +1, каждый
+    // отданный чанк −1 (читатель держит дельты сам). Видит и propagate, и hole-skip'ы.
+    fun getTrouble(): Long =
+        noSegment.get() + propagateNoFallback.get() + propagateDeclined.get() + holeSkipAttempt.get()
+
+    fun getServedTotal(): Long = servedVideo.get() + servedAudio.get()
 }
