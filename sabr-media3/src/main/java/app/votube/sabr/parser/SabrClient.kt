@@ -600,10 +600,16 @@ class SabrClient private constructor(
                             //    прыжок к голове запускает цикл «прыжок → loadPosition вне окна →
                             //    seek → рестарт со старого» (см. 2b).
                             //    Уже отданный sequence исключаем — иначе отдадим тот же чанк повторно.
+                            //    v38: кандидаты — только ВПЕРЁД от запрошенного и рядом с головой
+                            //    (≤15 seq ≈ 30с). Без этого при пустой свежей карте fallback хватал
+                            //    древний мусор со стартового префетча (лог: returned 8/9 for head
+                            //    805/816 — контент получасовой давности в плеер = «призрачная»
+                            //    музыка + скачки буфера). Не подошло ничего — лучше hole-skip.
                             if (seg == null && headSeq != null) {
                                 val lastServedSeq = lastReturnedSequenceByItag[itag]
+                                val requestedSeq = playbackRequest.segment
                                 val nearestHead = fallbackFormat.downloadedSegments.keys
-                                    .filter { it != lastServedSeq }
+                                    .filter { it != lastServedSeq && it >= requestedSeq && headSeq - it <= 15 }
                                     .minByOrNull { kotlin.math.abs(it - headSeq) }
                                 if (nearestHead != null) {
                                     seg = fallbackFormat.getSegment(nearestHead)
@@ -612,6 +618,8 @@ class SabrClient private constructor(
                                         SabrSessionStats.onNearestHead()
                                         hasStartedLive = true
                                     }
+                                } else {
+                                    SabrSessionStats.onStaleRejected()
                                 }
                             }
                             if (seg != null) {
@@ -972,12 +980,11 @@ class SabrClient private constructor(
     private fun evictStaleSegments(format: InitializedFormat) = withState {
         val head = liveMetadata?.headSequenceNumber ?: return@withState
         val floor = head - STALE_KEEP_SEGS
-        if (format.downloadedSegments.size > STALE_EVICT_THRESHOLD) {
-            format.downloadedSegments.keys.removeAll { it < floor }
-        }
-        if (format.bufferedSegments.size > STALE_EVICT_THRESHOLD) {
-            format.bufferedSegments.keys.removeAll { it < floor }
-        }
+        // v38: древность сносим ВСЕГДА (не только при переполнении): префетч, который никто
+        // не запросил (ABR ушёл вперёд), иначе лежит вечно и ждёт своего часа в fallback'ах.
+        // Пол молодой головы (head < KEEP) — отрицательный, removeAll ничего не тронет.
+        format.downloadedSegments.keys.removeAll { it < floor }
+        format.bufferedSegments.keys.removeAll { it < floor }
         consumedSegsByItag[format.id.itag]?.let { hist ->
             if (hist.size > CONSUMED_HIST_CAP) hist.keys.removeAll { it < head - CONSUMED_HIST_KEEP }
         }
@@ -1006,7 +1013,6 @@ class SabrClient private constructor(
         private const val EMPTY_BACKOFF_MS = 900L
         /** v16: окно эвикции пропущенных префетчей (~4 мин DVR от головы) и порог срабатывания. */
         private const val STALE_KEEP_SEGS = 120L
-        private const val STALE_EVICT_THRESHOLD = 120
         /** v16: кап consumed-истории для cumulative bufferedRanges (~20 мин). */
         private const val CONSUMED_HIST_KEEP = 600L
         private const val CONSUMED_HIST_CAP = 1500

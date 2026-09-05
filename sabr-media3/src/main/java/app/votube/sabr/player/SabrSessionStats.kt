@@ -32,6 +32,8 @@ object SabrSessionStats {
     private val nearestHead = AtomicLong()
     private val holeSkipAttempt = AtomicLong()
     private val holeSkipServed = AtomicLong()
+    // v38: отклонённые древние кандидаты nearest-head (призраки типа seq 8 при head 816).
+    private val staleRejected = AtomicLong()
 
     /** Новая сессия (создание сорса): печатаем итог прошлой и обнуляемся. */
     fun startSession(newVideoId: String) {
@@ -52,6 +54,7 @@ object SabrSessionStats {
         nearestHead.set(0)
         holeSkipAttempt.set(0)
         holeSkipServed.set(0)
+        staleRejected.set(0)
     }
 
     fun onVideoServed() { servedVideo.incrementAndGet(); maybeSummary() }
@@ -69,6 +72,8 @@ object SabrSessionStats {
     fun onNearestHead() { nearestHead.incrementAndGet(); maybeSummary() }
     fun onHoleSkipAttempt() { holeSkipAttempt.incrementAndGet(); maybeSummary() }
     fun onHoleSkipServed() { holeSkipServed.incrementAndGet(); maybeSummary() }
+    // v38: nearest-head остался без допустимых кандидатов (все древние) — идём в hole-skip.
+    fun onStaleRejected() { staleRejected.incrementAndGet(); maybeSummary() }
 
     private fun maybeSummary() {
         val now = SystemClock.elapsedRealtime()
@@ -90,7 +95,8 @@ object SabrSessionStats {
             "propagate=${propagateNoFallback.get()}+${propagateDeclined.get()}declined " +
             "fallbackSkip=${fallbackSkip.get()}(${fallbackSkipMs.get()}ms) " +
             "nearestHead=${nearestHead.get()} " +
-            "holeSkip=${holeSkipServed.get()}/${holeSkipAttempt.get()}"
+            "holeSkip=${holeSkipServed.get()}/${holeSkipAttempt.get()} " +
+            "staleRejected=${staleRejected.get()}"
     }
 
     // v37: интегратор беды для error-driven downgrade: каждый мисс/ретрай +1, каждый
