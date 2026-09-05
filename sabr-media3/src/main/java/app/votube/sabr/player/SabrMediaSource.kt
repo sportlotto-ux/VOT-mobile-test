@@ -225,11 +225,13 @@ class SabrMediaSource(
         // v36: таргет отставания — от сервера (next request policy), а не статика: сервер
         // двигает его 22с→50с по состоянию стрима, Exo подхватывает через окно на каждый
         // refresh (DefaultLivePlaybackSpeedControl читает liveConfiguration окна живьём).
-        // Нет политики (старт) — статический v35 (22с). Кламп: не ближе 15с к краю
-        // (зона пустых ответов) и не дальше 45с (maxOffset 60с обязан быть выше таргета).
+        // Нет политики (старт) — статический v35 (22с). Кламп 15–30с: потолок обязан быть
+        // НИЖЕ порога app-сторожа 35с (VideoStateController), иначе сторож будет стаскивать
+        // позицию с серверного −45с назад на −30с по кругу (лог 15:14 на 199-й).
+        // Не ближе 15с к краю (зона пустых ответов).
         val serverTargetMs = if (isLive) sabrClient.getLiveTargetOffsetMs() else null
         val liveConfig = if (serverTargetMs != null) MediaItem.LiveConfiguration.Builder()
-            .setTargetOffsetMs(serverTargetMs.coerceIn(15000, 45000))
+            .setTargetOffsetMs(serverTargetMs.coerceIn(15000, 30000))
             .setMinOffsetMs(12000)
             .setMaxOffsetMs(60000)
             .build() else liveConfiguration
