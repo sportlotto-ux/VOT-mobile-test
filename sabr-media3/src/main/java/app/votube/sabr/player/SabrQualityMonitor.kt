@@ -21,6 +21,10 @@ object SabrQualityMonitor {
     @Volatile private var videoHeight: Int = -1
     @Volatile private var audioItag: Int = -1
     @Volatile private var lastServeMs: Long = 0L
+    // v32: пресет качества пользователя (Настройки → Плеер → Видео-пресеты / HQ-диалог).
+    // 0 = авто. Глобален (не per-video), поэтому reset() его НЕ трогает; пишется с
+    // common-стороны (фабрика сорса + TrackSelectorManager.selectTrack).
+    @Volatile private var presetVideoHeight: Int = 0
 
     @Synchronized
     fun reset(videoId: String?) {
@@ -50,6 +54,16 @@ object SabrQualityMonitor {
 
     fun isFresh(): Boolean =
         videoHeight > 0 && System.currentTimeMillis() - lastServeMs < FRESH_MS
+
+    /** v32: пресет как закон (0 = авто, ABR решает сам). Пишется из common, читается чанк-сорсом каждый чанк. */
+    fun setPreset(height: Int) {
+        if (presetVideoHeight != height) {
+            presetVideoHeight = height
+            android.util.Log.i("SabrQualityMonitor", "quality preset: ${if (height > 0) "${height}p (locked)" else "auto"}")
+        }
+    }
+
+    fun getPresetHeight(): Int = presetVideoHeight
 
     fun getVideoHeight(): Int = videoHeight
     fun getVideoWidth(): Int = videoWidth

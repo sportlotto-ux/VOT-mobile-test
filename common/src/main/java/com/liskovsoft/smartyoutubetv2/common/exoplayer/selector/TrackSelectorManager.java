@@ -25,6 +25,7 @@ import androidx.media3.exoplayer.trackselection.RestoreTrackSelector.TrackSelect
 
 import com.liskovsoft.smartyoutubetv2.common.prefs.PlayerData;
 import com.liskovsoft.smartyoutubetv2.common.prefs.PlayerTweaksData;
+import app.votube.sabr.player.SabrQualityMonitor;
 import com.liskovsoft.smartyoutubetv2.common.utils.Utils;
 
 import java.util.ArrayList;
@@ -420,6 +421,13 @@ public class TrackSelectorManager implements TrackSelectorCallback {
 
         // save immediately
         applyOverride(rendererIndex);
+
+        // v32: выбор в HQ-диалоге — закон и для SABR-пути: дублируем пресет в монитор,
+        // chunk source держит его без ABR-прыжков. Авто-выбор = 0 (как раньше).
+        if (rendererIndex == RENDERER_INDEX_VIDEO) {
+            FormatItem preset = PlayerData.instance(mContext).getFormat(FormatItem.TYPE_VIDEO);
+            SabrQualityMonitor.setPreset(preset != null && preset.isPreset() ? preset.getHeight() : 0);
+        }
     }
 
     /**

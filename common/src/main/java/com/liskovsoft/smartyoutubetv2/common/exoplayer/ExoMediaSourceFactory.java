@@ -43,6 +43,7 @@ import com.liskovsoft.youtubeapi.formatbuilders.utils.MediaFormatUtils;
 import app.votube.sabr.manifest.SabrManifest;
 import app.votube.sabr.manifest.SabrStreamInfo;
 import app.votube.sabr.player.SabrMediaSource;
+import app.votube.sabr.player.SabrQualityMonitor;
 import app.votube.sabr.parser.PoTokenProvider;
 import com.liskovsoft.sharedutils.cronet.CronetManager;
 import com.liskovsoft.sharedutils.helpers.FileHelpers;
@@ -52,6 +53,8 @@ import com.liskovsoft.sharedutils.okhttp.OkHttpManager;
 import com.liskovsoft.smartyoutubetv2.common.exoplayer.errors.DashDefaultLoadErrorHandlingPolicy;
 import com.liskovsoft.smartyoutubetv2.common.exoplayer.errors.SabrDefaultLoadErrorHandlingPolicy;
 import com.liskovsoft.smartyoutubetv2.common.exoplayer.errors.TrackErrorFixer;
+import com.liskovsoft.smartyoutubetv2.common.exoplayer.selector.FormatItem;
+import com.liskovsoft.smartyoutubetv2.common.prefs.PlayerData;
 import com.liskovsoft.smartyoutubetv2.common.prefs.PlayerTweaksData;
 import com.liskovsoft.smartyoutubetv2.common.utils.Utils;
 import com.liskovsoft.googlecommon.common.helpers.DefaultHeaders;
@@ -332,6 +335,11 @@ public class ExoMediaSourceFactory {
         MediaItem mediaItem = new MediaItem.Builder()
                 .setUri("sabr://" + formatInfo.getVideoId())
                 .build();
+
+        // v32: стартовый пресет качества (Настройки → Плеер → Видео-пресеты): chunk source
+        // держит его как закон — стартует с него и не прыгает сам. 0 = авто (как раньше).
+        FormatItem videoPreset = PlayerData.instance(mContext).getFormat(FormatItem.TYPE_VIDEO);
+        SabrQualityMonitor.setPreset(videoPreset != null && videoPreset.isPreset() ? videoPreset.getHeight() : 0);
 
         return new SabrMediaSource.Factory(mContext, manifest, poTokenProvider)
                 .setLoadErrorHandlingPolicy(new SabrDefaultLoadErrorHandlingPolicy())

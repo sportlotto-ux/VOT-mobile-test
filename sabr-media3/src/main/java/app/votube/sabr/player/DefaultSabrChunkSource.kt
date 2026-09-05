@@ -21,6 +21,7 @@ import androidx.media3.exoplayer.source.chunk.ContainerMediaChunk
 import androidx.media3.exoplayer.source.chunk.InitializationChunk
 import androidx.media3.exoplayer.source.chunk.MediaChunk
 import androidx.media3.exoplayer.source.chunk.MediaChunkIterator
+import androidx.media3.exoplayer.trackselection.AdaptiveTrackSelection
 import androidx.media3.exoplayer.trackselection.ExoTrackSelection
 import androidx.media3.exoplayer.upstream.CmcdConfiguration
 import androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy
@@ -92,6 +93,8 @@ class DefaultSabrChunkSource(
     // v28: последний itag, отрепорченный в SabrQualityMonitor (факт для UI).
     private var lastReportedVideoItag: Int = -1
     private var lastReportedAudioItag: Int = -1
+    // v32: последний holder пресета (лог только при смене).
+    private var lastPresetHolderIdx: Int = -1
 
     // v9: гейт по остатку буфера (предложение пользователя: держать 15-30с,
     // подтаскивать каждые 5-7с по остатку, всегда знать голову эфира). <15с — тянуть
@@ -241,6 +244,29 @@ class DefaultSabrChunkSource(
         // changing the format on the next selection, ensuring there is some data already buffered.
         var representationHolder = representationHolders[trackSelection.selectedIndex]
         sabrClient.selectFormat(representationHolder.representation)
+        // v32: пресет пользователя — закон: стартуем с него и держим без ABR-прыжков
+        // (live+VOD, каждый чанк). 0 = авто: штатный ABR ниже. Читается из монитора,
+        // куда его кладут фабрика сорса (старт) и TrackSelectorManager (HQ-диалог).
+        val presetHeight = if (trackType == C.TRACK_TYPE_VIDEO) SabrQualityMonitor.getPresetHeight() else 0
+        val presetIdx = if (presetHeight > 0) presetHolderIndex(presetHeight) else -1
+        val presetLocked = presetIdx != -1
+        if (presetLocked) {
+            if (representationHolders[presetIdx] !== representationHolder) {
+                representationHolder = representationHolders[presetIdx]
+                sabrClient.selectFormat(representationHolder.representation)
+            }
+            if (presetIdx != lastPresetHolderIdx) {
+                lastPresetHolderIdx = presetIdx
+                val rep = representationHolder.representation
+                android.util.Log.i(
+                    "SabrChunkSource",
+                    "quality preset locked: holder idx=$presetIdx, " +
+                        "itag=${rep.streamInfo.itag}, ${rep.format.width}x${rep.format.height}"
+                )
+            }
+        } else {
+            lastPresetHolderIdx = -1
+        }
         // Hysteresis for live ABR: suppress downgrade spirals and the start-at-144p slide.
         // Лог 11:35:59→11:36:29: старт на 399 (1080p AV1), за 30с сползание 398→394 (144p).
         // Причины: (1) метр пропускной способности видел SABR-раундтрип как «медленную передачу»
@@ -281,7 +307,9 @@ class DefaultSabrChunkSource(
         // кончается отменой докачки (InterruptedException) и сбросом очереди.
         // Стартовый разгон не трогаем (пустая очередь — можно).
         val shouldSuppressUpgrade = isLive && isUpgrade && bufferedMs < 8_000 && queue.isNotEmpty()
-        if (shouldSuppressDowngrade) {
+        if (presetLocked) {
+            // v32: пресет держим — ABR-обновление селекции пропускаем целиком.
+        } else if (shouldSuppressDowngrade) {
             android.util.Log.i(
                 "SabrChunkSource",
                 "ABR hysteresis: suppress downgrade $beforeIndex -> $afterIndex " +
@@ -314,7 +342,10 @@ class DefaultSabrChunkSource(
         // v28: стартовое качество live — 360/480 вместо 144p (Exo стартует с нижней оценки
         // пропускной способности). Берём максимальную высоту <=480; дальше ABR с реальными
         // замерами сам поднимется. Только первый чанк (previousChunk==null, очередь пуста).
-        if (isLive && trackType == C.TRACK_TYPE_VIDEO && previousChunk == null && queue.isEmpty()) {
+        // v32: при пресете и при ручном фиксе селекции (не Adaptive) — не лезем: селекция уже
+        // выражает волю пользователя, оверрайд дал бы рассинхрон holder'а с init (v31).
+        if (isLive && trackType == C.TRACK_TYPE_VIDEO && previousChunk == null && queue.isEmpty()
+            && !presetLocked && trackSelection is AdaptiveTrackSelection) {
             val initialIdx = selectInitialLiveHolderIndex()
             if (initialIdx != -1 && representationHolders[initialIdx] !== representationHolder) {
                 representationHolder = representationHolders[initialIdx]
@@ -957,6 +988,33 @@ class DefaultSabrChunkSource(
             checkInBounds()
             return representationHolder.getSegmentEndTimeUs(currentIndex)
         }
+    }
+
+    // v32: holder под пресет пользователя: точная высота, иначе максимальная ниже,
+    // иначе минимальная. -1 — высот нет (фолбэк на авто-путь).
+    private fun presetHolderIndex(presetHeight: Int): Int {
+        var bestUnder = -1
+        var bestUnderH = -1
+        var lowest = -1
+        var lowestH = Int.MAX_VALUE
+        for (i in representationHolders.indices) {
+            val h = representationHolders[i].representation.format.height
+            if (h <= 0) {
+                continue
+            }
+            if (h == presetHeight) {
+                return i
+            }
+            if (h < presetHeight && h > bestUnderH) {
+                bestUnderH = h
+                bestUnder = i
+            }
+            if (h < lowestH) {
+                lowestH = h
+                lowest = i
+            }
+        }
+        return if (bestUnder != -1) bestUnder else lowest
     }
 
     // v28: стартовый holder live — максимальная высота <= 480, иначе минимальная высота.
