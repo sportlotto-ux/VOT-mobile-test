@@ -209,7 +209,7 @@ public class VideoStateController extends BasePlayerController {
         Utils.removeCallbacks(mUpdateHistory);
 
         if (isRestoreActualLive()) {
-            seekToActualLivePosition();
+            seekToActualLivePosition(true); // S2: автоматика onPlay — только по stall
         }
     }
 
@@ -773,7 +773,31 @@ public class VideoStateController extends BasePlayerController {
     }
 
     private boolean seekToActualLivePosition() {
+        return seekToActualLivePosition(false);
+    }
+
+    // S2: автоматика — только по stall. Раньше любое отставание дальше порога дёргало
+    // позицию (один из пяти «нянек» вечернего шторма). Теперь: позиция движется —
+    // руки прочь, даже если далеко (DVR-отмотка смотрит и идёт); стоит 10с+ — дёргаем.
+    // Явные пользовательские пути (кнопка next/live) идут с onlyIfStalled=false.
+    private long mLastLiveCheckPosMs = -1;
+    private long mLastLiveCheckTimeMs = 0;
+    private boolean seekToActualLivePosition(boolean onlyIfStalled) {
         if (getPlayer() != null && isBehindActualLive()) {
+            if (onlyIfStalled) {
+                long pos = getPlayer().getPositionMs();
+                long now = System.currentTimeMillis();
+                // Джиттер ±2с — не прогресс, иначе stall не ловим никогда.
+                if (Math.abs(pos - mLastLiveCheckPosMs) > 2_000) {
+                    mLastLiveCheckPosMs = pos;
+                    mLastLiveCheckTimeMs = now;
+                    return false;
+                }
+                if (now - mLastLiveCheckTimeMs < 10_000) {
+                    return false;
+                }
+                mLastLiveCheckPosMs = -1;
+            }
             getPlayer().setPositionMs(getPlayer().getDurationMs() - getLiveBuffer());
             mIsRestoreActualLive = true;
             return true;

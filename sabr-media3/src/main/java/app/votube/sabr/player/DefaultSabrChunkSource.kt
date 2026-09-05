@@ -682,7 +682,12 @@ class DefaultSabrChunkSource(
                     // live re-anchor выше.
                     val playerTimeMs = Util.usToMs(loadingInfo.playbackPositionUs)
                     val behindPlayback = requestedTimeMs < playerTimeMs - 4000 || declaredEndMs < playerTimeMs - 4000
-                    if (behindPlayback) {
+                    // S3: рывок только на большом отставании (>15с). Мелкое (4-15с) Exo
+                    // съедает разгоном 1.2x сам — наш рывок дублировал его и рвал позицию
+                    // метрономом +5с (лог 19:58: каждый цикл catch-up = скип). jumpedForSync
+                    // в мелком случае не ставим — декларация едет от якоря как раньше.
+                    val lagMs = playerTimeMs - minOf(requestedTimeMs, declaredEndMs)
+                    if (behindPlayback && lagMs > 15_000) {
                         val refTimeMs = maxOf(playerTimeMs, loadAbsMs)
                         val catchUpMs = maxOf(refTimeMs, sabrClient.getMaxLastReturnedTimeMs()?.takeIf { it > refTimeMs } ?: refTimeMs)
                         requestedTimeMs = headTimeMs?.let { minOf(catchUpMs, it) } ?: catchUpMs
@@ -696,6 +701,9 @@ class DefaultSabrChunkSource(
                         }
                         jumpedForSync = true
                         android.util.Log.w("SabrChunkSource", "live catch-up: itag=$currentItag requested $requestedTimeMs was behind playback $playerTimeMs/queue $loadAbsMs (declaredEnd=$declaredEndMs) -> jump (segmentNum=$segmentNum)")
+                    } else if (behindPlayback) {
+                        // S3: мелкое отставание — разгон Exo, не рывок.
+                        android.util.Log.i("SabrChunkSource", "live catch-up skipped: itag=$currentItag lag=${lagMs}ms <= 15s, Exo 1.2x handles")
                     }
                     // v13: будущее за головой НЕ ждём молча (см. гейт выше — null
                     // разучивает лоадер просыпаться). Запрос уходит как есть: сервер

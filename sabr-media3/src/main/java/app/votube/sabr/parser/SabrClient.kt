@@ -272,9 +272,7 @@ class SabrClient private constructor(
     fun getEndSegmentNumber(formatId: FormatId): Long? =
         withState { initializedFormats[formatId.itag]?.endSegmentNumber }
 
-    fun getFirstAvailableSegmentNumber(formatId: FormatId): Long? = withState {
-        initializedFormats[formatId.itag]?.downloadedSegments?.keys?.minOrNull()
-    }
+    // S6: getFirstAvailableSegmentNumber удалён (мёртвый, вызовов нет).
 
     fun getLiveHeadSequenceNumber(): Long? = withState { liveMetadata?.headSequenceNumber }
     fun getLiveHeadTimeMs(): Long? = withState { liveMetadata?.headTimeMs }
@@ -288,7 +286,7 @@ class SabrClient private constructor(
     /** sequence последнего отданного сегмента для itag, или null если ещё не отдавали.
      *  ChunkSource использует его, чтобы следующий live-запрос шёл от реальной нумерации сервера. */
     fun getLastReturnedSequence(itag: Int): Long? = withState { lastReturnedSequenceByItag[itag] }
-    fun getMaxLastReturnedSequence(): Long? = withState { lastReturnedSequenceByItag.values.maxOrNull() }
+    // S6: getMaxLastReturnedSequence удалён (мёртвый, вызовов нет).
 
     /** Время (startMs) последнего отданного сегмента для itag — база для планирования следующего. */
     fun getLastReturnedTimeMs(itag: Int): Long? = withState { lastReturnedTimeMsByItag[itag] }
@@ -666,8 +664,12 @@ class SabrClient private constructor(
                                     seg = fallbackFormat.getSegment(skip.sequenceNumber)
                                     if (seg != null) {
                                         Log.i(TAG, "live fallback skip: +${seg.header.startMs - requestedTime}ms seq=${seg.sequenceNumber} startMs=${seg.header.startMs} ~ requestedTime $requestedTime instead of $requestedSeq")
-                                        SabrSessionStats.onFallbackSkip(seg.header.startMs - requestedTime)
-                                        noteHoleEvent()
+                                        // S5: стартовое позиционирование (requestedTime 0 → край,
+                                        // +3900с) — не дыра эфира, в статистику не считаем.
+                                        if (hasStartedLive) {
+                                            SabrSessionStats.onFallbackSkip(seg.header.startMs - requestedTime)
+                                            noteHoleEvent()
+                                        }
                                     }
                                 }
                             }
@@ -719,8 +721,11 @@ class SabrClient private constructor(
                                             SabrSessionStats.onNearestHead()
                                         } else if (jumpMs > 30_000) {
                                             Log.i(TAG, "live void jump: +${jumpMs}ms seq=$nearestHead startMs=${seg.header.startMs} ~ requestedTime $requestedTime (head $headSeq)")
-                                            SabrSessionStats.onFallbackSkip(jumpMs)
-                                            noteHoleEvent()
+                                            // S5: см. выше — стартовые прыжки не считаем.
+                                            if (hasStartedLive) {
+                                                SabrSessionStats.onFallbackSkip(jumpMs)
+                                                noteHoleEvent()
+                                            }
                                         } else {
                                             seg = null
                                         }
@@ -1184,8 +1189,7 @@ class SabrClient private constructor(
         }
     }
 
-    fun generatePoToken(): ByteString? =
-        poTokenProvider?.getStreamingPoToken(videoId)?.let { ByteString.copyFrom(it) }
+    // S6: generatePoToken() удалён (мёртвый; poToken идёт через poTokenProvider напрямую).
 
     /** Точный перевод ticks→ms без переполнения: сначала деление, остаток — отдельно.
      *  Прямое ticks*1000 вылетает за Long при ns-timescale (лог 09:48:43).
